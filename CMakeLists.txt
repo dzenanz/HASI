@@ -12,7 +12,16 @@ endif()
 
 project(HASI CXX) # High-throughput Application for Skeletal Imaging
 
-find_package(ITK 5 REQUIRED COMPONENTS BoneEnhancement ITKIOImageBase ITKIONIFTI ITKIONRRD)
+find_package(ITK 5 REQUIRED
+  COMPONENTS
+    ITKSmoothing
+    ITKThresholding
+    ITKConnectedComponents
+    ITKBinaryMathematicalMorphology
+    BoneEnhancement
+    ITKIOMeta
+    ITKIONRRD
+    )
 include(${ITK_USE_FILE})
 
 add_executable(segmentBonesInMicroCT segmentBonesInMicroCT.cxx)

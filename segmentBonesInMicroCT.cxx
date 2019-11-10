@@ -2,135 +2,172 @@
 #include "itkArray.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
+#include "itkMedianImageFilter.h"
+#include "itkBinaryThresholdImageFilter.h"
+#include "itkConnectedComponentImageFilter.h"
+#include "itkRelabelComponentImageFilter.h"
+#include "itkBinaryDilateImageFilter.h"
+#include "itkBinaryErodeImageFilter.h"
 #include "itkMultiScaleHessianEnhancementImageFilter.h"
 #include "itkDescoteauxEigenToScalarImageFilter.h"
-#include "itkCommand.h"
 
-class MyCommand : public itk::Command
+
+template <typename TImage>
+void
+Write(const TImage * out, std::string filename, bool compress)
 {
-public:
-  itkNewMacro(MyCommand);
-
-public:
-  void
-  Execute(itk::Object * caller, const itk::EventObject & event) override
+  using WriterType = itk::ImageFileWriter<TImage>;
+  typename WriterType::Pointer w = WriterType::New();
+  w->SetInput(out);
+  w->SetFileName(filename);
+  w->SetUseCompression(compress);
+  try
   {
-    Execute((const itk::Object *)caller, event);
+    w->Update();
   }
-
-  void
-  Execute(const itk::Object * caller, const itk::EventObject & event) override
+  catch (itk::ExceptionObject & error)
   {
-    if (!itk::ProgressEvent().CheckEvent(&event))
-    {
-      return;
-    }
-    const itk::ProcessObject * processObject = dynamic_cast<const itk::ProcessObject *>(caller);
-    if (!processObject)
-    {
-      return;
-    }
-    float progress = processObject->GetProgress() * 100;
-    if (int(progress) > int(m_PastProgress))
-    {
-      m_PastProgress = progress;
-      // \r is a cheap trick to reset the line
-      // The spaces are a dirty trick since the output buffer is not reset everytime
-      std::cout << "\rProgress: " << m_PastProgress << "%"
-                << "                                " << std::flush;
-      if (m_PastProgress >= 99)
-      {
-        std::cout << std::endl;
-      }
-    }
+    std::cerr << error << std::endl;
   }
+}
 
-private:
-  float m_PastProgress = -1;
-};
+template <typename TImage>
+void
+Write(itk::SmartPointer<TImage> out, std::string filename)
+{
+  Write(out.GetPointer(), filename.c_str());
+}
+
+template <typename ImageType>
+void
+mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename, const itk::Array<double> & sigmaArray)
+{
+  constexpr unsigned ImageDimension = ImageType::ImageDimension;
+  using OutImageType = itk::Image<unsigned char, ImageDimension>;
+  using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, OutImageType>;
+
+  typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
+  binTh->SetInput(inImage);
+  binTh->SetLowerThreshold(1000);
+  Write(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
+
+  using LabelImageType = itk::Image<itk::SizeValueType, ImageDimension>;
+  using LabelerType = itk::ConnectedComponentImageFilter<OutImageType, LabelImageType>;
+  LabelerType::Pointer labeler = LabelerType::New();
+  labeler->SetInput(binTh->GetOutput());
+  Write(labeler->GetOutput(), outFilename + "-bin1cc-label.nrrd", true);
+
+  using RelabelType = itk::RelabelComponentImageFilter<LabelImageType, OutImageType>;
+  typename RelabelType::Pointer relabeler = RelabelType::New();
+  relabeler->SetInput(labeler->GetOutput());
+  relabeler->SetMinimumObjectSize(1000);
+  Write(relabeler->GetOutput(), outFilename + "-bin1ccr-label.nrrd", true);
+
+  // SDF
+
+  // TODO: remove morphology
+
+  using RealPixelType = float;
+  using RealImageType = itk::Image<RealPixelType, ImageDimension>;
+
+  // typename BinaryDilateImageFilter<TInputImage, TOutputImage, TKernel>::Pointer dilate =
+  //  BinaryDilateImageFilter<TInputImage, TOutputImage, TKernel>::New();
+
+  // typename BinaryErodeImageFilter<TInputImage, TInputImage, TKernel>::Pointer erode =
+  //  BinaryErodeImageFilter<TInputImage, TInputImage, TKernel>::New();
+
+  // dilate->SetKernel(this->GetKernel());
+  // dilate->ReleaseDataFlagOn();
+  // erode->SetKernel(this->GetKernel());
+  // erode->ReleaseDataFlagOn();
+  // dilate->SetForegroundValue(m_ForegroundValue); // Intensity value to dilate
+  // erode->SetForegroundValue(m_ForegroundValue);  // Intensity value to erode
+  // erode->SetBackgroundValue(m_BackgroundValue);  // Replacement value for eroded voxels
+
+  // erode->SetInput(this->GetInput());
+  // dilate->SetInput(erode->GetOutput());
+  // dilate->Update();
+
+
+  using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
+  using DescoteauxEigenToScalarImageFilterType =
+    itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
+
+
+  MultiScaleHessianFilterType::Pointer            multiScaleFilter = MultiScaleHessianFilterType::New();
+  DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
+  multiScaleFilter->SetInput(inImage);
+  multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
+  multiScaleFilter->SetSigmaArray(sigmaArray);
+
+  //multiScaleFilter->Update();
+  //Write(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
+}
 
 int
 main(int argc, char * argv[])
 {
-  if (argc < 6)
+  if (argc < 3)
   {
     std::cerr << "Usage: " << std::endl;
     std::cerr << argv[0];
-    std::cerr << " <InputFileName> <OutputMeasure> ";
-    std::cerr << " <SetEnhanceBrightObjects[0,1]> ";
-    std::cerr << " <NumberOfSigma> <Sigma1> [<Sigma2> <Sigma3>] ";
+    std::cerr << " <InputFileName> <OutputSegmentation> [corticalBoneThickness]";
     std::cerr << std::endl;
     return EXIT_FAILURE;
   }
 
-  /* Read input Parameters */
-  std::string inputFileName = argv[1];
-  std::string outputMeasureFileName = argv[2];
-
-  int                enhanceBrightObjects = std::stoi(argv[3]);
-  int                numberOfSigma = std::stoi(argv[4]);
-  double             thisSigma;
-  itk::Array<double> sigmaArray;
-  sigmaArray.SetSize(numberOfSigma);
-  for (int i = 0; i < numberOfSigma; ++i)
+  try
   {
-    thisSigma = std::stod(argv[5 + i]);
-    sigmaArray.SetElement(i, thisSigma);
-  }
+    std::string inputFileName = argv[1];
+    std::string outputFileName = argv[2];
+    double      corticalBoneThickness = 0.1;
+    if (argc > 3)
+    {
+      corticalBoneThickness = std::stod(argv[3]);
+    }
 
-  std::cout << "Read in the following parameters:" << std::endl;
-  std::cout << "  InputFilePath:               " << inputFileName << std::endl;
-  std::cout << "  OutputMeasure:               " << outputMeasureFileName << std::endl;
-  if (enhanceBrightObjects == 1)
+    constexpr unsigned nSigma = 5;
+    itk::Array<double> sigmaArray;
+    sigmaArray.SetSize(nSigma);
+    for (int i = 0; i < nSigma; ++i)
+    {
+      sigmaArray.SetElement(i, (0.5 + i * 1.0 / (nSigma - 1)) * corticalBoneThickness);
+    }
+    std::cout << " InputFilePath: " << inputFileName << std::endl;
+    std::cout << "OutputFilePath: " << outputFileName << std::endl;
+    std::cout << "Sigmas: " << sigmaArray << std::endl;
+    std::cout << std::endl;
+
+    constexpr unsigned ImageDimension = 3;
+    using InputPixelType = short;
+    using InputImageType = itk::Image<InputPixelType, ImageDimension>;
+
+    using ReaderType = itk::ImageFileReader<InputImageType>;
+    ReaderType::Pointer reader = ReaderType::New();
+    reader->SetFileName(inputFileName);
+
+    using MedianType = itk::MedianImageFilter<InputImageType, InputImageType>;
+    MedianType::Pointer median = MedianType::New();
+    median->SetInput(reader->GetOutput());
+    median->Update();
+
+    InputImageType::Pointer inImage = median->GetOutput();
+    inImage->DisconnectPipeline();
+
+    mainProcessing<InputImageType>(inImage, outputFileName, sigmaArray);
+    return EXIT_SUCCESS;
+  }
+  catch (itk::ExceptionObject & exc)
   {
-    std::cout << "  SetEnhanceBrightObjects:     "
-              << "Enhancing bright objects" << std::endl;
+    std::cerr << exc;
   }
-  else
+  catch (std::runtime_error & exc)
   {
-    std::cout << "  SetEnhanceBrightObjects:     "
-              << "Enhancing dark objects" << std::endl;
+    std::cerr << exc.what();
   }
-  std::cout << "  NumberOfSigma:               " << numberOfSigma << std::endl;
-  std::cout << "  Sigmas:                      " << sigmaArray << std::endl;
-  std::cout << std::endl;
-
-  /* Setup Types */
-  constexpr unsigned int ImageDimension = 3;
-  using InputPixelType = short;
-  using InputImageType = itk::Image<InputPixelType, ImageDimension>;
-  using OutputPixelType = float;
-  using OutputImageType = itk::Image<OutputPixelType, ImageDimension>;
-
-  using ReaderType = itk::ImageFileReader<InputImageType>;
-  using MeasureWriterType = itk::ImageFileWriter<OutputImageType>;
-  using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<InputImageType, OutputImageType>;
-  using DescoteauxEigenToScalarImageFilterType =
-    itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, OutputImageType>;
-
-  /* Do preprocessing */
-  std::cout << "Reading in " << inputFileName << std::endl;
-  ReaderType::Pointer reader = ReaderType::New();
-  reader->SetFileName(inputFileName);
-
-  /* Multiscale measure */
-  MultiScaleHessianFilterType::Pointer            multiScaleFilter = MultiScaleHessianFilterType::New();
-  DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
-  multiScaleFilter->SetInput(reader->GetOutput());
-  multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
-  multiScaleFilter->SetSigmaArray(sigmaArray);
-
-  std::cout << "Running multiScaleFilter..." << std::endl;
-  MyCommand::Pointer myCommand = MyCommand::New();
-  multiScaleFilter->AddObserver(itk::ProgressEvent(), myCommand);
-  multiScaleFilter->Update();
-
-  MeasureWriterType::Pointer measureWriter = MeasureWriterType::New();
-  measureWriter->SetInput(multiScaleFilter->GetOutput());
-  measureWriter->SetFileName(outputMeasureFileName);
-
-  std::cout << "Writing results to " << outputMeasureFileName << std::endl;
-  measureWriter->Write();
-
-  return EXIT_SUCCESS;
+  catch (...)
+  {
+    std::cerr << "Unknown error has occurred" << std::endl;
+  }
+  return EXIT_FAILURE;
 }
