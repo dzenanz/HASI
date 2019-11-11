@@ -6,8 +6,6 @@
 #include "itkBinaryThresholdImageFilter.h"
 #include "itkConnectedComponentImageFilter.h"
 #include "itkRelabelComponentImageFilter.h"
-#include "itkBinaryDilateImageFilter.h"
-#include "itkBinaryErodeImageFilter.h"
 #include "itkMultiScaleHessianEnhancementImageFilter.h"
 #include "itkDescoteauxEigenToScalarImageFilter.h"
 
@@ -38,6 +36,27 @@ Write(itk::SmartPointer<TImage> out, std::string filename)
   Write(out.GetPointer(), filename.c_str());
 }
 
+template <typename TImage>
+itk::SmartPointer<TImage>
+connectedComponentAnalysis(const TImage * labelImage, std::string outFilename)
+{
+  using LabelImageType = itk::Image<itk::SizeValueType, TImage::ImageDimension>;
+  using LabelerType = itk::ConnectedComponentImageFilter<TImage, LabelImageType>;
+  LabelerType::Pointer labeler = LabelerType::New();
+  labeler->SetInput(labelImage);
+  static unsigned invocationCount = 0;
+  Write(labeler->GetOutput(), outFilename + std::to_string(invocationCount) + "-cc-label.nrrd", true);
+
+  using RelabelType = itk::RelabelComponentImageFilter<LabelImageType, TImage>;
+  typename RelabelType::Pointer relabeler = RelabelType::New();
+  relabeler->SetInput(labeler->GetOutput());
+  relabeler->SetMinimumObjectSize(1000);
+  Write(relabeler->GetOutput(), outFilename + std::to_string(invocationCount) + "-ccR-label.nrrd", true);
+  ++invocationCount;
+
+  return relabeler->GetOutput();
+}
+
 template <typename ImageType>
 void
 mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename, const itk::Array<double> & sigmaArray)
@@ -51,43 +70,11 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   binTh->SetLowerThreshold(1000);
   Write(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
 
-  using LabelImageType = itk::Image<itk::SizeValueType, ImageDimension>;
-  using LabelerType = itk::ConnectedComponentImageFilter<OutImageType, LabelImageType>;
-  LabelerType::Pointer labeler = LabelerType::New();
-  labeler->SetInput(binTh->GetOutput());
-  Write(labeler->GetOutput(), outFilename + "-bin1cc-label.nrrd", true);
-
-  using RelabelType = itk::RelabelComponentImageFilter<LabelImageType, OutImageType>;
-  typename RelabelType::Pointer relabeler = RelabelType::New();
-  relabeler->SetInput(labeler->GetOutput());
-  relabeler->SetMinimumObjectSize(1000);
-  Write(relabeler->GetOutput(), outFilename + "-bin1ccr-label.nrrd", true);
-
-  // SDF
-
-  // TODO: remove morphology
+  typename OutImageType::Pointer thBone = connectedComponentAnalysis(binTh->GetOutput(), outFilename);
 
   using RealPixelType = float;
   using RealImageType = itk::Image<RealPixelType, ImageDimension>;
-
-  // typename BinaryDilateImageFilter<TInputImage, TOutputImage, TKernel>::Pointer dilate =
-  //  BinaryDilateImageFilter<TInputImage, TOutputImage, TKernel>::New();
-
-  // typename BinaryErodeImageFilter<TInputImage, TInputImage, TKernel>::Pointer erode =
-  //  BinaryErodeImageFilter<TInputImage, TInputImage, TKernel>::New();
-
-  // dilate->SetKernel(this->GetKernel());
-  // dilate->ReleaseDataFlagOn();
-  // erode->SetKernel(this->GetKernel());
-  // erode->ReleaseDataFlagOn();
-  // dilate->SetForegroundValue(m_ForegroundValue); // Intensity value to dilate
-  // erode->SetForegroundValue(m_ForegroundValue);  // Intensity value to erode
-  // erode->SetBackgroundValue(m_BackgroundValue);  // Replacement value for eroded voxels
-
-  // erode->SetInput(this->GetInput());
-  // dilate->SetInput(erode->GetOutput());
-  // dilate->Update();
-
+  // SDF
 
   using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
   using DescoteauxEigenToScalarImageFilterType =
@@ -100,8 +87,8 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
   multiScaleFilter->SetSigmaArray(sigmaArray);
 
-  //multiScaleFilter->Update();
-  //Write(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
+  // multiScaleFilter->Update();
+  // Write(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
 }
 
 int

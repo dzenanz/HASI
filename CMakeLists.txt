@@ -17,7 +17,6 @@ find_package(ITK 5 REQUIRED
     ITKSmoothing
     ITKThresholding
     ITKConnectedComponents
-    ITKBinaryMathematicalMorphology
     BoneEnhancement
     ITKIOMeta
     ITKIONRRD
