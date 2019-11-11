@@ -17,6 +17,7 @@ find_package(ITK 5 REQUIRED
     ITKSmoothing
     ITKThresholding
     ITKConnectedComponents
+    ITKDistanceMap
     BoneEnhancement
     ITKIOMeta
     ITKIONRRD
