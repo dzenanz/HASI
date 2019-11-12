@@ -32,10 +32,11 @@ WriteImage(TImage * out, std::string filename, bool compress)
     out->Update();
 
     diff = std::chrono::steady_clock::now() - startTime;
-    std::cout << diff.count() << " Writing " << filename << std::flush;
+    std::cout << diff.count() << " Writing " << filename << std::endl;
     w->Update();
+
     diff = std::chrono::steady_clock::now() - startTime;
-    std::cout << " ... " << diff.count() << std::endl;
+    std::cout << diff.count() << " Done!" << std::endl;
   }
   catch (itk::ExceptionObject & error)
   {
@@ -44,16 +45,18 @@ WriteImage(TImage * out, std::string filename, bool compress)
 }
 
 template <typename TImage>
-void
-WriteImage(itk::SmartPointer<TImage> out, std::string filename)
+inline void
+WriteImage(itk::SmartPointer<TImage> out, std::string filename, bool compress)
 {
-  WriteImage(out.GetPointer(), filename.c_str());
+  WriteImage(out.GetPointer(), filename, compress);
 }
 
 // split the binary mask into components and remove the small islands
 template <typename TImage>
 itk::SmartPointer<TImage>
-connectedComponentAnalysis(const TImage * labelImage, std::string outFilename, itk::IdentifierType & numLabels)
+connectedComponentAnalysis(itk::SmartPointer<TImage> labelImage,
+                           std::string               outFilename,
+                           itk::IdentifierType &     numLabels)
 {
   using ManyLabelImageType = itk::Image<itk::SizeValueType, TImage::ImageDimension>;
   using LabelerType = itk::ConnectedComponentImageFilter<TImage, ManyLabelImageType>;
@@ -87,15 +90,13 @@ sdfDilate(itk::SmartPointer<TImage> labelImage, double radius, std::string outFi
   typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
   distF->SetInput(labelImage);
   distF->SetSquaredDistance(true);
-  static unsigned invocationCount = 0;
-  WriteImage(distF->GetOutput(), outFilename + std::to_string(invocationCount) + "-dist-dilate.nrrd", false);
+  WriteImage(distF->GetOutput(), outFilename + "-dist-dilate.nrrd", false);
 
   using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, TImage>;
   typename FloatThresholdType::Pointer sdfTh = FloatThresholdType::New();
   sdfTh->SetInput(distF->GetOutput());
   sdfTh->SetUpperThreshold(radius * radius);
-  WriteImage(sdfTh->GetOutput(), outFilename + std::to_string(invocationCount) + "-dilate-label.nrrd", true);
-  ++invocationCount;
+  WriteImage(sdfTh->GetOutput(), outFilename + "-dilate-label.nrrd", true);
 
   sdfTh->Update();
   return sdfTh->GetOutput();
@@ -111,8 +112,7 @@ sdfErode(itk::SmartPointer<TImage> labelImage, double radius, std::string outFil
   using NotType = itk::NotImageFilter<TImage, TImage>;
   NotType::Pointer negator = NotType::New();
   negator->SetInput(labelImage);
-  static unsigned invocationCount = 0;
-  WriteImage(negator->GetOutput(), outFilename + std::to_string(invocationCount) + "-erode-Not-label.nrrd", true);
+  WriteImage(negator->GetOutput(), outFilename + "-erode-Not-label.nrrd", true);
 
   using RealPixelType = float;
   using RealImageType = itk::Image<RealPixelType, TImage::ImageDimension>;
@@ -121,14 +121,13 @@ sdfErode(itk::SmartPointer<TImage> labelImage, double radius, std::string outFil
   typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
   distF->SetInput(negator->GetOutput());
   distF->SetSquaredDistance(true);
-  WriteImage(distF->GetOutput(), outFilename + std::to_string(invocationCount) + "-dist-erode.nrrd", false);
+  WriteImage(distF->GetOutput(), outFilename + "-dist-erode.nrrd", false);
 
   using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, TImage>;
   typename FloatThresholdType::Pointer sdfTh = FloatThresholdType::New();
   sdfTh->SetInput(distF->GetOutput());
   sdfTh->SetLowerThreshold(radius * radius);
-  WriteImage(sdfTh->GetOutput(), outFilename + std::to_string(invocationCount) + "-erode-label.nrrd", true);
-  ++invocationCount;
+  WriteImage(sdfTh->GetOutput(), outFilename + "-erode-label.nrrd", true);
 
   sdfTh->Update();
   return sdfTh->GetOutput();
@@ -143,19 +142,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   using LabelImageType = itk::Image<unsigned char, ImageType::ImageDimension>;
   using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, LabelImageType>;
 
-  {
-    typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
-    binTh->SetInput(inImage);
-    binTh->SetLowerThreshold(1500);
-    WriteImage(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
-
-    itk::IdentifierType numBones = 0;
-
-    typename LabelImageType::Pointer thBone = connectedComponentAnalysis(binTh->GetOutput(), outFilename, numBones);
-    typename LabelImageType::Pointer dilatedBone = sdfDilate(thBone, 5.0 * corticalBoneThickness, outFilename);
-    typename LabelImageType::Pointer erodedBone = sdfErode(dilatedBone, 5.5 * corticalBoneThickness, outFilename);
-  }
-
+  typename LabelImageType::Pointer gaussLabel;
   {
     using GaussType = itk::SmoothingRecursiveGaussianImageFilter<ImageType>;
     typename GaussType::Pointer gaussF = GaussType::New();
@@ -167,25 +154,94 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     binTh2->SetInput(gaussF->GetOutput());
     binTh2->SetLowerThreshold(2000);
     WriteImage(binTh2->GetOutput(), outFilename + "-gauss-label.nrrd", true);
+    gaussLabel = binTh2->GetOutput();
   }
 
-  using RealImageType = itk::Image<float, ImageType::ImageDimension>;
-  using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
-  using DescoteauxEigenToScalarImageFilterType =
-    itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
-  MultiScaleHessianFilterType::Pointer multiScaleFilter = MultiScaleHessianFilterType::New();
-  multiScaleFilter->SetInput(inImage);
-  multiScaleFilter->SetSigmaArray(sigmaArray);
-  DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
-  multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
+  // TODO: improve MultiScaleHessianEnhancementImageFilter to allow streaming
+  // because this filter uses a lot of memory
+  typename LabelImageType::Pointer cortexLabel;
+  {
+    using RealImageType = itk::Image<float, ImageType::ImageDimension>;
+    using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
+    using DescoteauxEigenToScalarImageFilterType =
+      itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
+    MultiScaleHessianFilterType::Pointer multiScaleFilter = MultiScaleHessianFilterType::New();
+    multiScaleFilter->SetInput(inImage);
+    multiScaleFilter->SetSigmaArray(sigmaArray);
+    DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
+    multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
 
-  WriteImage(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
+    WriteImage(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
 
-  using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
-  typename FloatThresholdType::Pointer descoTh = FloatThresholdType::New();
-  descoTh->SetInput(multiScaleFilter->GetOutput());
-  descoTh->SetLowerThreshold(0.2);
-  WriteImage(descoTh->GetOutput(), outFilename + "-desco-label.nrrd", true);
+    using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
+    typename FloatThresholdType::Pointer descoTh = FloatThresholdType::New();
+    descoTh->SetInput(multiScaleFilter->GetOutput());
+    descoTh->SetLowerThreshold(0.2);
+    WriteImage(descoTh->GetOutput(), outFilename + "-desco-label.nrrd", true);
+    cortexLabel = descoTh->GetOutput();
+  }
+
+
+  typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
+  binTh->SetInput(inImage);
+  binTh->SetLowerThreshold(1500);
+  WriteImage(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
+  typename LabelImageType::Pointer thLabel = binTh->GetOutput();
+
+  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+  // we will update cortexLabel with information from gaussLabel and thLabel
+  using RegionType = typename LabelImageType::RegionType;
+  RegionType wholeImage = thLabel->GetLargestPossibleRegion();
+  mt->ParallelizeImageRegion<ImageType::ImageDimension>(
+    wholeImage,
+    [cortexLabel, gaussLabel, thLabel](RegionType region) {
+      itk::ImageRegionConstIterator<LabelImageType> gIt(gaussLabel, region);
+      itk::ImageRegionConstIterator<LabelImageType> tIt(thLabel, region);
+      itk::ImageRegionIterator<LabelImageType>      cIt(cortexLabel, region);
+      for (; !cIt.IsAtEnd(); ++gIt, ++tIt, ++cIt)
+      {
+        unsigned char p = cIt.Get() || gIt.Get();
+        p = p && tIt.Get();
+        cIt.Set(p);
+      }
+    },
+    nullptr);
+  WriteImage(cortexLabel, outFilename + "-cortex-label.nrrd", true);
+
+  // do morphological processing per bone, to avoid merging bones which are close to each other
+  itk::IdentifierType numBones = 0;
+
+  typename LabelImageType::Pointer bones = connectedComponentAnalysis(thLabel, outFilename, numBones);
+  // we might not even get to this point if there are more bones than 255
+  // we need 3 labels per bone, one each for cortical, trabecular and marrow
+  itkAssertOrThrowMacro(numBones <= 85, "There are too many bones to fit into uchar");
+  for (unsigned bone = 1; bone <= numBones; bone++)
+  {
+    typename LabelImageType::Pointer thBone = LabelImageType::New();
+    thBone->CopyInformation(bones);
+    thBone->SetRegions(wholeImage);
+    thBone->Allocate();
+
+    // TODO: also calculate expanded bounding box
+    mt->ParallelizeImageRegion<ImageType::ImageDimension>(
+      wholeImage,
+      [thBone, bones, cortexLabel, bone](RegionType region) {
+        itk::ImageRegionConstIterator<LabelImageType> bIt(bones, region);
+        itk::ImageRegionConstIterator<LabelImageType> cIt(cortexLabel, region);
+        itk::ImageRegionIterator<LabelImageType>      oIt(thBone, region);
+        for (; !oIt.IsAtEnd(); ++bIt, ++cIt, ++oIt)
+        {
+          bool p = (bIt.Get() == bone) && (cIt.Get() == 0);
+          oIt.Set(p);
+        }
+      },
+      nullptr);
+    std::string boneFilename = outFilename + "-bone" + std::to_string(bone);
+    WriteImage(thBone, boneFilename + "-trabecular-label.nrrd", true);
+
+    typename LabelImageType::Pointer dilatedBone = sdfDilate(thBone, 3.0 * corticalBoneThickness, boneFilename);
+    typename LabelImageType::Pointer erodedBone = sdfErode(dilatedBone, 3.0 * corticalBoneThickness, boneFilename);
+  }
 }
 
 int
