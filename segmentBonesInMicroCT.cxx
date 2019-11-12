@@ -197,7 +197,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
 
   typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
   binTh->SetInput(inImage);
-  binTh->SetLowerThreshold(1500);
+  binTh->SetLowerThreshold(1500); // TODO: start from an even higher threshold, so bones are well separated
   WriteImage(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
   typename LabelImageType::Pointer thLabel = binTh->GetOutput();
 
@@ -239,6 +239,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     thBone->Allocate();
 
     // TODO: also calculate expanded bounding box
+    // so the subsequent operations don't need to process the whole image
     mt->ParallelizeImageRegion<ImageType::ImageDimension>(
       wholeImage,
       [thBone, bones, cortexEroded, bone](RegionType region) {
@@ -256,7 +257,9 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     WriteImage(thBone, boneFilename + "-trabecular-label.nrrd", true);
 
     typename LabelImageType::Pointer dilatedBone = sdfDilate(thBone, 3.0 * corticalBoneThickness, boneFilename);
-    typename LabelImageType::Pointer erodedBone = sdfErode(dilatedBone, 3.0 * corticalBoneThickness, boneFilename);
+    typename LabelImageType::Pointer erodedBone = sdfErode(dilatedBone, 4.0 * corticalBoneThickness, boneFilename);
+    dilatedBone = sdfDilate(erodedBone, 1.0 * corticalBoneThickness, boneFilename);
+    // now do the same for marrow, seeding from cortical and trabecular bone
   }
 }
 
