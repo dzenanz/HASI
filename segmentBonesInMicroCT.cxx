@@ -136,9 +136,10 @@ sdfErode(itk::SmartPointer<TImage> labelImage, double radius, std::string outFil
 
 template <typename ImageType>
 void
-mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename, const itk::Array<double> & sigmaArray)
+mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename, double corticalBoneThickness)
 {
-  double corticalBoneThickness = sigmaArray[1];
+  itk::Array<double> sigmaArray(1);
+  sigmaArray[0] = corticalBoneThickness;
   using LabelImageType = itk::Image<unsigned char, ImageType::ImageDimension>;
   using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, LabelImageType>;
 
@@ -209,14 +210,10 @@ main(int argc, char * argv[])
       corticalBoneThickness = std::stod(argv[3]);
     }
 
-    itk::Array<double> sigmaArray(3);
-    sigmaArray[0] = corticalBoneThickness / 2;
-    sigmaArray[1] = corticalBoneThickness;
-    sigmaArray[2] = corticalBoneThickness * 2;
     std::cout.precision(4);
     std::cout << " InputFilePath: " << inputFileName << std::endl;
     std::cout << "OutputFilePath: " << outputFileName << std::endl;
-    std::cout << "Sigmas: " << sigmaArray << std::endl;
+    std::cout << "Cortical Bone Thickness: " << corticalBoneThickness << std::endl;
     std::cout << std::endl;
 
     constexpr unsigned ImageDimension = 3;
@@ -235,7 +232,7 @@ main(int argc, char * argv[])
     InputImageType::Pointer inImage = median->GetOutput();
     inImage->DisconnectPipeline();
 
-    mainProcessing<InputImageType>(inImage, outputFileName, sigmaArray);
+    mainProcessing<InputImageType>(inImage, outputFileName, corticalBoneThickness);
     return EXIT_SUCCESS;
   }
   catch (itk::ExceptionObject & exc)
