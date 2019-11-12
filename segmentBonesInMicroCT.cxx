@@ -1,4 +1,6 @@
+#include <chrono>
 #include <iostream>
+
 #include "itkArray.h"
 #include "itkImageFileReader.h"
 #include "itkImageFileWriter.h"
@@ -8,13 +10,15 @@
 #include "itkRelabelComponentImageFilter.h"
 #include "itkSignedMaurerDistanceMapImageFilter.h"
 #include "itkNotImageFilter.h"
+#include "itkSmoothingRecursiveGaussianImageFilter.h"
 #include "itkMultiScaleHessianEnhancementImageFilter.h"
 #include "itkDescoteauxEigenToScalarImageFilter.h"
 
+auto startTime = std::chrono::steady_clock::now(); // global variable
 
 template <typename TImage>
 void
-WriteImage(const TImage * out, std::string filename, bool compress)
+WriteImage(TImage * out, std::string filename, bool compress)
 {
   using WriterType = itk::ImageFileWriter<TImage>;
   typename WriterType::Pointer w = WriterType::New();
@@ -23,7 +27,15 @@ WriteImage(const TImage * out, std::string filename, bool compress)
   w->SetUseCompression(compress);
   try
   {
+    std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
+    std::cout << diff.count() << " Updating " << filename << std::endl;
+    out->Update();
+
+    diff = std::chrono::steady_clock::now() - startTime;
+    std::cout << diff.count() << " Writing " << filename << std::flush;
     w->Update();
+    diff = std::chrono::steady_clock::now() - startTime;
+    std::cout << " ... " << diff.count() << std::endl;
   }
   catch (itk::ExceptionObject & error)
   {
@@ -126,40 +138,53 @@ template <typename ImageType>
 void
 mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename, const itk::Array<double> & sigmaArray)
 {
-  constexpr unsigned ImageDimension = ImageType::ImageDimension;
-  using LabelImageType = itk::Image<unsigned char, ImageDimension>;
+  double corticalBoneThickness = sigmaArray[1];
+  using LabelImageType = itk::Image<unsigned char, ImageType::ImageDimension>;
   using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, LabelImageType>;
 
-  typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
-  binTh->SetInput(inImage);
-  binTh->SetLowerThreshold(1000);
-  WriteImage(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
+  {
+    typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
+    binTh->SetInput(inImage);
+    binTh->SetLowerThreshold(1500);
+    WriteImage(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true);
 
-  itk::IdentifierType numBones = 0;
+    itk::IdentifierType numBones = 0;
 
-  typename LabelImageType::Pointer thBone = connectedComponentAnalysis(binTh->GetOutput(), outFilename, numBones);
-  typename LabelImageType::Pointer dilatedBone =
-    sdfDilate(thBone, 3.0 * sigmaArray[sigmaArray.size() - 1], outFilename);
-  typename LabelImageType::Pointer erodedBone =
-    sdfErode(dilatedBone, 3.5 * sigmaArray[sigmaArray.size() - 1], outFilename);
+    typename LabelImageType::Pointer thBone = connectedComponentAnalysis(binTh->GetOutput(), outFilename, numBones);
+    typename LabelImageType::Pointer dilatedBone = sdfDilate(thBone, 5.0 * corticalBoneThickness, outFilename);
+    typename LabelImageType::Pointer erodedBone = sdfErode(dilatedBone, 5.5 * corticalBoneThickness, outFilename);
+  }
 
+  {
+    using GaussType = itk::SmoothingRecursiveGaussianImageFilter<ImageType>;
+    typename GaussType::Pointer gaussF = GaussType::New();
+    gaussF->SetInput(inImage);
+    gaussF->SetSigma(corticalBoneThickness);
+    WriteImage(gaussF->GetOutput(), outFilename + "-gauss.nrrd", false);
 
-  using RealPixelType = float;
-  using RealImageType = itk::Image<RealPixelType, ImageDimension>;
+    typename BinaryThresholdType::Pointer binTh2 = BinaryThresholdType::New();
+    binTh2->SetInput(gaussF->GetOutput());
+    binTh2->SetLowerThreshold(2000);
+    WriteImage(binTh2->GetOutput(), outFilename + "-gauss-label.nrrd", true);
+  }
 
+  using RealImageType = itk::Image<float, ImageType::ImageDimension>;
   using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
   using DescoteauxEigenToScalarImageFilterType =
     itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
-
-
-  MultiScaleHessianFilterType::Pointer            multiScaleFilter = MultiScaleHessianFilterType::New();
-  DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
+  MultiScaleHessianFilterType::Pointer multiScaleFilter = MultiScaleHessianFilterType::New();
   multiScaleFilter->SetInput(inImage);
-  multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
   multiScaleFilter->SetSigmaArray(sigmaArray);
+  DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
+  multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
 
-  // multiScaleFilter->Update();
-  // WriteImage(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
+  WriteImage(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
+
+  using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
+  typename FloatThresholdType::Pointer descoTh = FloatThresholdType::New();
+  descoTh->SetInput(multiScaleFilter->GetOutput());
+  descoTh->SetLowerThreshold(0.2);
+  WriteImage(descoTh->GetOutput(), outFilename + "-desco-label.nrrd", true);
 }
 
 int
@@ -184,13 +209,11 @@ main(int argc, char * argv[])
       corticalBoneThickness = std::stod(argv[3]);
     }
 
-    constexpr unsigned nSigma = 5;
-    itk::Array<double> sigmaArray;
-    sigmaArray.SetSize(nSigma);
-    for (int i = 0; i < nSigma; ++i)
-    {
-      sigmaArray.SetElement(i, (0.5 + i * 1.0 / (nSigma - 1)) * corticalBoneThickness);
-    }
+    itk::Array<double> sigmaArray(3);
+    sigmaArray[0] = corticalBoneThickness / 2;
+    sigmaArray[1] = corticalBoneThickness;
+    sigmaArray[2] = corticalBoneThickness * 2;
+    std::cout.precision(4);
     std::cout << " InputFilePath: " << inputFileName << std::endl;
     std::cout << "OutputFilePath: " << outputFileName << std::endl;
     std::cout << "Sigmas: " << sigmaArray << std::endl;
@@ -207,7 +230,7 @@ main(int argc, char * argv[])
     using MedianType = itk::MedianImageFilter<InputImageType, InputImageType>;
     MedianType::Pointer median = MedianType::New();
     median->SetInput(reader->GetOutput());
-    median->Update();
+    WriteImage(median->GetOutput(), outputFileName + "-median.nrrd", false);
 
     InputImageType::Pointer inImage = median->GetOutput();
     inImage->DisconnectPipeline();
