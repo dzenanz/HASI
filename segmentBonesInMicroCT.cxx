@@ -155,44 +155,44 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   using LabelImageType = itk::Image<unsigned char, ImageType::ImageDimension>;
   using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, LabelImageType>;
 
-  // typename LabelImageType::Pointer gaussLabel;
-  //{
-  //  using GaussType = itk::SmoothingRecursiveGaussianImageFilter<ImageType>;
-  //  typename GaussType::Pointer gaussF = GaussType::New();
-  //  gaussF->SetInput(inImage);
-  //  gaussF->SetSigma(corticalBoneThickness);
-  //  WriteImage(gaussF->GetOutput(), outFilename + "-gauss.nrrd", false);
+  typename LabelImageType::Pointer gaussLabel;
+  {
+    using GaussType = itk::SmoothingRecursiveGaussianImageFilter<ImageType>;
+    typename GaussType::Pointer gaussF = GaussType::New();
+    gaussF->SetInput(inImage);
+    gaussF->SetSigma(corticalBoneThickness);
+    WriteImage(gaussF->GetOutput(), outFilename + "-gauss.nrrd", false);
 
-  //  typename BinaryThresholdType::Pointer binTh2 = BinaryThresholdType::New();
-  //  binTh2->SetInput(gaussF->GetOutput());
-  //  binTh2->SetLowerThreshold(2000);
-  //  WriteImage(binTh2->GetOutput(), outFilename + "-gauss-label.nrrd", true);
-  //  gaussLabel = binTh2->GetOutput();
-  //}
+    typename BinaryThresholdType::Pointer binTh2 = BinaryThresholdType::New();
+    binTh2->SetInput(gaussF->GetOutput());
+    binTh2->SetLowerThreshold(2000);
+    WriteImage(binTh2->GetOutput(), outFilename + "-gauss-label.nrrd", true);
+    gaussLabel = binTh2->GetOutput();
+  }
 
-  //// TODO: improve MultiScaleHessianEnhancementImageFilter to allow streaming
-  //// because this filter uses a lot of memory
-  // typename LabelImageType::Pointer cortexLabel;
-  //{
-  //  using RealImageType = itk::Image<float, ImageType::ImageDimension>;
-  //  using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
-  //  using DescoteauxEigenToScalarImageFilterType =
-  //    itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
-  //  MultiScaleHessianFilterType::Pointer multiScaleFilter = MultiScaleHessianFilterType::New();
-  //  multiScaleFilter->SetInput(inImage);
-  //  multiScaleFilter->SetSigmaArray(sigmaArray);
-  //  DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
-  //  multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
+  // TODO: improve MultiScaleHessianEnhancementImageFilter to allow streaming
+  // because this filter uses a lot of memory
+  typename LabelImageType::Pointer cortexLabel;
+  {
+    using RealImageType = itk::Image<float, ImageType::ImageDimension>;
+    using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
+    using DescoteauxEigenToScalarImageFilterType =
+      itk::DescoteauxEigenToScalarImageFilter<MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
+    MultiScaleHessianFilterType::Pointer multiScaleFilter = MultiScaleHessianFilterType::New();
+    multiScaleFilter->SetInput(inImage);
+    multiScaleFilter->SetSigmaArray(sigmaArray);
+    DescoteauxEigenToScalarImageFilterType::Pointer descoFilter = DescoteauxEigenToScalarImageFilterType::New();
+    multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
 
-  //  WriteImage(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
+    WriteImage(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false);
 
-  //  using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
-  //  typename FloatThresholdType::Pointer descoTh = FloatThresholdType::New();
-  //  descoTh->SetInput(multiScaleFilter->GetOutput());
-  //  descoTh->SetLowerThreshold(0.2);
-  //  WriteImage(descoTh->GetOutput(), outFilename + "-desco-label.nrrd", true);
-  //  cortexLabel = descoTh->GetOutput();
-  //}
+    using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
+    typename FloatThresholdType::Pointer descoTh = FloatThresholdType::New();
+    descoTh->SetInput(multiScaleFilter->GetOutput());
+    descoTh->SetLowerThreshold(0.2);
+    WriteImage(descoTh->GetOutput(), outFilename + "-desco-label.nrrd", true);
+    cortexLabel = descoTh->GetOutput();
+  }
 
 
   typename BinaryThresholdType::Pointer binTh = BinaryThresholdType::New();
@@ -205,22 +205,22 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   // we will update cortexLabel with information from gaussLabel and thLabel
   using RegionType = typename LabelImageType::RegionType;
   RegionType wholeImage = inImage->GetLargestPossibleRegion();
-  // mt->ParallelizeImageRegion<ImageType::ImageDimension>(
-  //  wholeImage,
-  //  [cortexLabel, gaussLabel, thLabel](RegionType region) {
-  //    itk::ImageRegionConstIterator<LabelImageType> gIt(gaussLabel, region);
-  //    itk::ImageRegionConstIterator<LabelImageType> tIt(thLabel, region);
-  //    itk::ImageRegionIterator<LabelImageType>      cIt(cortexLabel, region);
-  //    for (; !cIt.IsAtEnd(); ++gIt, ++tIt, ++cIt)
-  //    {
-  //      unsigned char p = cIt.Get() || gIt.Get();
-  //      p = p && tIt.Get();
-  //      cIt.Set(p);
-  //    }
-  //  },
-  //  nullptr);
-  // WriteImage(cortexLabel, outFilename + "-cortex-label.nrrd", true);
-  typename LabelImageType::Pointer cortexLabel = ReadImage<LabelImageType>(outFilename + "-cortex-label.nrrd");
+  mt->ParallelizeImageRegion<ImageType::ImageDimension>(
+    wholeImage,
+    [cortexLabel, gaussLabel, thLabel](RegionType region) {
+      itk::ImageRegionConstIterator<LabelImageType> gIt(gaussLabel, region);
+      itk::ImageRegionConstIterator<LabelImageType> tIt(thLabel, region);
+      itk::ImageRegionIterator<LabelImageType>      cIt(cortexLabel, region);
+      for (; !cIt.IsAtEnd(); ++gIt, ++tIt, ++cIt)
+      {
+        unsigned char p = cIt.Get() || gIt.Get();
+        p = p && tIt.Get();
+        cIt.Set(p);
+      }
+    },
+    nullptr);
+  WriteImage(cortexLabel, outFilename + "-cortex-label.nrrd", true);
+  // typename LabelImageType::Pointer cortexLabel = ReadImage<LabelImageType>(outFilename + "-cortex-label.nrrd");
   typename LabelImageType::Pointer cortexEroded =
     sdfErode(cortexLabel, 0.5 * corticalBoneThickness, outFilename + "-cortex-eroded-label.nrrd");
 
@@ -268,31 +268,30 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     // now do the same for marrow, seeding from cortical and trabecular bone
     mt->ParallelizeImageRegion<ImageType::ImageDimension>(
       wholeImage,
-      [thBone, dilatedBone, cortexEroded](RegionType region) {
-        itk::ImageRegionConstIterator<LabelImageType> bIt(dilatedBone, region);
-        itk::ImageRegionConstIterator<LabelImageType> cIt(cortexEroded, region);
+      [thBone, erodedBone](RegionType region) {
+        itk::ImageRegionConstIterator<LabelImageType> bIt(erodedBone, region);
         itk::ImageRegionIterator<LabelImageType>      oIt(thBone, region);
-        for (; !oIt.IsAtEnd(); ++bIt, ++cIt, ++oIt)
+        for (; !oIt.IsAtEnd(); ++bIt, ++oIt)
         {
-          oIt.Set(bIt.Get() || cIt.Get());
+          oIt.Set(bIt.Get() || oIt.Get());
         }
       },
       nullptr);
-    typename LabelImageType::Pointer dilatedMarrow = sdfDilate(thBone, 6.0 * corticalBoneThickness, boneFilename);
-    typename LabelImageType::Pointer erodedMarrow = sdfErode(dilatedMarrow, 7.0 * corticalBoneThickness, boneFilename);
-    dilatedMarrow = sdfDilate(erodedMarrow, 1.0 * corticalBoneThickness, boneFilename);
+    typename LabelImageType::Pointer dilatedMarrow = sdfDilate(thBone, 5.0 * corticalBoneThickness, boneFilename);
+    typename LabelImageType::Pointer erodedMarrow = sdfErode(dilatedMarrow, 6.0 * corticalBoneThickness, boneFilename);
 
     // now combine them
     mt->ParallelizeImageRegion<ImageType::ImageDimension>(
       wholeImage,
-      [finalBones, dilatedMarrow, dilatedBone, cortexLabel, bone](RegionType region) {
-        itk::ImageRegionConstIterator<LabelImageType> mIt(dilatedMarrow, region);
+      [finalBones, erodedMarrow, dilatedBone, cortexLabel, bones, bone](RegionType region) {
+        itk::ImageRegionConstIterator<LabelImageType> mIt(erodedMarrow, region);
         itk::ImageRegionConstIterator<LabelImageType> bIt(dilatedBone, region);
         itk::ImageRegionConstIterator<LabelImageType> cIt(cortexLabel, region);
+        itk::ImageRegionConstIterator<LabelImageType> nIt(bones, region);
         itk::ImageRegionIterator<LabelImageType>      oIt(finalBones, region);
-        for (; !oIt.IsAtEnd(); ++mIt, ++bIt, ++cIt, ++oIt)
+        for (; !oIt.IsAtEnd(); ++mIt, ++bIt, ++cIt, ++nIt, ++oIt)
         {
-          if (cIt.Get())
+          if (cIt.Get() && nIt.Get() == bone)
           {
             oIt.Set(3 * bone - 2);
           }
@@ -308,6 +307,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
         }
       },
       nullptr);
+    WriteImage(finalBones, boneFilename + "-label.nrrd", true);
   }
   WriteImage(finalBones, outFilename, true);
 }
