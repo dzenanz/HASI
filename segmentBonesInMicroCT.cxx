@@ -155,7 +155,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   using LabelImageType = itk::Image<unsigned char, ImageType::ImageDimension>;
   using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, LabelImageType>;
 
-  //typename LabelImageType::Pointer gaussLabel;
+  // typename LabelImageType::Pointer gaussLabel;
   //{
   //  using GaussType = itk::SmoothingRecursiveGaussianImageFilter<ImageType>;
   //  typename GaussType::Pointer gaussF = GaussType::New();
@@ -172,7 +172,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
 
   //// TODO: improve MultiScaleHessianEnhancementImageFilter to allow streaming
   //// because this filter uses a lot of memory
-  //typename LabelImageType::Pointer cortexLabel;
+  // typename LabelImageType::Pointer cortexLabel;
   //{
   //  using RealImageType = itk::Image<float, ImageType::ImageDimension>;
   //  using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
@@ -204,8 +204,8 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
   // we will update cortexLabel with information from gaussLabel and thLabel
   using RegionType = typename LabelImageType::RegionType;
-  RegionType wholeImage = thLabel->GetLargestPossibleRegion();
-  //mt->ParallelizeImageRegion<ImageType::ImageDimension>(
+  RegionType wholeImage = inImage->GetLargestPossibleRegion();
+  // mt->ParallelizeImageRegion<ImageType::ImageDimension>(
   //  wholeImage,
   //  [cortexLabel, gaussLabel, thLabel](RegionType region) {
   //    itk::ImageRegionConstIterator<LabelImageType> gIt(gaussLabel, region);
@@ -219,10 +219,15 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   //    }
   //  },
   //  nullptr);
-  //WriteImage(cortexLabel, outFilename + "-cortex-label.nrrd", true);
+  // WriteImage(cortexLabel, outFilename + "-cortex-label.nrrd", true);
   typename LabelImageType::Pointer cortexLabel = ReadImage<LabelImageType>(outFilename + "-cortex-label.nrrd");
   typename LabelImageType::Pointer cortexEroded =
     sdfErode(cortexLabel, 0.5 * corticalBoneThickness, outFilename + "-cortex-eroded-label.nrrd");
+
+  typename LabelImageType::Pointer finalBones = LabelImageType::New();
+  finalBones->CopyInformation(inImage);
+  finalBones->SetRegions(wholeImage);
+  finalBones->Allocate(true);
 
   // do morphological processing per bone, to avoid merging bones which are close to each other
   itk::IdentifierType numBones = 0;
@@ -234,7 +239,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   for (unsigned bone = 1; bone <= numBones; bone++)
   {
     typename LabelImageType::Pointer thBone = LabelImageType::New();
-    thBone->CopyInformation(bones);
+    thBone->CopyInformation(inImage);
     thBone->SetRegions(wholeImage);
     thBone->Allocate();
 
@@ -259,8 +264,52 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     typename LabelImageType::Pointer dilatedBone = sdfDilate(thBone, 3.0 * corticalBoneThickness, boneFilename);
     typename LabelImageType::Pointer erodedBone = sdfErode(dilatedBone, 4.0 * corticalBoneThickness, boneFilename);
     dilatedBone = sdfDilate(erodedBone, 1.0 * corticalBoneThickness, boneFilename);
+
     // now do the same for marrow, seeding from cortical and trabecular bone
+    mt->ParallelizeImageRegion<ImageType::ImageDimension>(
+      wholeImage,
+      [thBone, dilatedBone, cortexEroded](RegionType region) {
+        itk::ImageRegionConstIterator<LabelImageType> bIt(dilatedBone, region);
+        itk::ImageRegionConstIterator<LabelImageType> cIt(cortexEroded, region);
+        itk::ImageRegionIterator<LabelImageType>      oIt(thBone, region);
+        for (; !oIt.IsAtEnd(); ++bIt, ++cIt, ++oIt)
+        {
+          oIt.Set(bIt.Get() || cIt.Get());
+        }
+      },
+      nullptr);
+    typename LabelImageType::Pointer dilatedMarrow = sdfDilate(thBone, 6.0 * corticalBoneThickness, boneFilename);
+    typename LabelImageType::Pointer erodedMarrow = sdfErode(dilatedMarrow, 7.0 * corticalBoneThickness, boneFilename);
+    dilatedMarrow = sdfDilate(erodedMarrow, 1.0 * corticalBoneThickness, boneFilename);
+
+    // now combine them
+    mt->ParallelizeImageRegion<ImageType::ImageDimension>(
+      wholeImage,
+      [finalBones, dilatedMarrow, dilatedBone, cortexLabel, bone](RegionType region) {
+        itk::ImageRegionConstIterator<LabelImageType> mIt(dilatedMarrow, region);
+        itk::ImageRegionConstIterator<LabelImageType> bIt(dilatedBone, region);
+        itk::ImageRegionConstIterator<LabelImageType> cIt(cortexLabel, region);
+        itk::ImageRegionIterator<LabelImageType>      oIt(finalBones, region);
+        for (; !oIt.IsAtEnd(); ++mIt, ++bIt, ++cIt, ++oIt)
+        {
+          if (cIt.Get())
+          {
+            oIt.Set(3 * bone - 2);
+          }
+          else if (bIt.Get())
+          {
+            oIt.Set(3 * bone - 1);
+          }
+          else if (mIt.Get())
+          {
+            oIt.Set(3 * bone);
+          }
+          // else this is background
+        }
+      },
+      nullptr);
   }
+  WriteImage(finalBones, outFilename, true);
 }
 
 int
