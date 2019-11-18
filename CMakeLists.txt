@@ -19,7 +19,8 @@ find_package(ITK 5 REQUIRED
     ITKConnectedComponents
     ITKDistanceMap
     ITKRegionGrowing
-    ITKImageGrid
+    # ITKImageGrid
+    ITKLevelSets
     BoneEnhancement
     ITKIOMeta
     ITKIONRRD

@@ -14,7 +14,7 @@
 #include "itkMultiScaleHessianEnhancementImageFilter.h"
 #include "itkDescoteauxEigenToScalarImageFilter.h"
 #include "itkNeighborhoodConnectedImageFilter.h"
-//#include "itkRegionOfInterestImageFilter.h"
+#include "itkGeodesicActiveContourLevelSetImageFilter.h"
 
 
 auto     startTime = std::chrono::steady_clock::now();
@@ -164,6 +164,13 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   using RealImageType = itk::Image<float, Dimension>;
   using LabelImageType = itk::Image<unsigned char, Dimension>;
   using BinaryThresholdType = itk::BinaryThresholdImageFilter<ImageType, LabelImageType>;
+  using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
+
+  // we will do pixel-wise operation in a multi-threaded manner
+  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+
+  using RegionType = typename LabelImageType::RegionType;
+  RegionType wholeImage = inImage->GetLargestPossibleRegion();
 
   typename LabelImageType::Pointer gaussLabel;
   {
@@ -180,11 +187,15 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     gaussLabel = binTh2->GetOutput();
   }
 
-  // TODO: improve MultiScaleHessianEnhancementImageFilter to allow streaming
-  // because this filter uses a lot of memory
+  typename RealImageType::Pointer desco = nullptr;
+  typename RealImageType::Pointer descoSpeed = RealImageType::New();
+  descoSpeed->CopyInformation(inImage);
+  descoSpeed->SetRegions(wholeImage);
+  descoSpeed->Allocate(false);
   typename LabelImageType::Pointer cortexLabel;
   {
-    using RealImageType = itk::Image<float, Dimension>;
+    // TODO: improve MultiScaleHessianEnhancementImageFilter to allow streaming
+    // because this filter uses a lot of memory
     using MultiScaleHessianFilterType = itk::MultiScaleHessianEnhancementImageFilter<ImageType, RealImageType>;
     using DescoteauxEigenToScalarImageFilterType =
       itk::DescoteauxEigenToScalarImageFilter<typename MultiScaleHessianFilterType::EigenValueImageType, RealImageType>;
@@ -196,13 +207,27 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     multiScaleFilter->SetEigenToScalarImageFilter(descoFilter);
 
     UpdateAndWrite(multiScaleFilter->GetOutput(), outFilename + "-desco.nrrd", false, 1);
+    desco = multiScaleFilter->GetOutput();
 
-    using FloatThresholdType = itk::BinaryThresholdImageFilter<RealImageType, LabelImageType>;
     typename FloatThresholdType::Pointer descoTh = FloatThresholdType::New();
     descoTh->SetInput(multiScaleFilter->GetOutput());
     descoTh->SetLowerThreshold(0.1);
     UpdateAndWrite(descoTh->GetOutput(), outFilename + "-desco-label.nrrd", true, 1);
     cortexLabel = descoTh->GetOutput();
+
+    // create speed image for use later
+    mt->ParallelizeImageRegion<Dimension>(
+      wholeImage,
+      [desco, descoSpeed](RegionType region) {
+        itk::ImageRegionConstIterator<RealImageType> iIt(desco, region);
+        itk::ImageRegionIterator<RealImageType>      oIt(descoSpeed, region);
+        for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
+        {
+          oIt.Set(1.0f - iIt.Get()); // simply invert the values
+        }
+      },
+      nullptr);
+    UpdateAndWrite(descoSpeed, outFilename + "-descoSpeed.nrrd", false, 1);
   }
 
 
@@ -212,10 +237,7 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
   UpdateAndWrite(binTh->GetOutput(), outFilename + "-bin1-label.nrrd", true, 2);
   typename LabelImageType::Pointer thLabel = binTh->GetOutput();
 
-  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
   // we will update cortexLabel with information from gaussLabel and thLabel
-  using RegionType = typename LabelImageType::RegionType;
-  RegionType wholeImage = inImage->GetLargestPossibleRegion();
   mt->ParallelizeImageRegion<Dimension>(
     wholeImage,
     [cortexLabel, gaussLabel, thLabel](RegionType region) {
@@ -406,29 +428,39 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
       sdfErode(dilatedMarrow, 6.0 * corticalBoneThickness, boneFilename + "-marrow", 3);
 
     // now combine them, clipping them to the bone mask implied by partialInput
+    typename LabelImageType::Pointer singleBone = LabelImageType::New();
+    singleBone->CopyInformation(inImage);
+    singleBone->SetRegions(safeBoneRegion);
+    singleBone->Allocate(true);
+
     mt->ParallelizeImageRegion<Dimension>(
       safeBoneRegion,
-      [finalBones, erodedMarrow, dilatedBone, cortexLabel, partialInput, bone, background](RegionType region) {
+      [finalBones, erodedMarrow, dilatedBone, cortexLabel, partialInput, singleBone, bone, background](
+        RegionType region) {
         itk::ImageRegionConstIterator<LabelImageType> mIt(erodedMarrow, region);
         itk::ImageRegionConstIterator<LabelImageType> bIt(dilatedBone, region);
         itk::ImageRegionConstIterator<LabelImageType> cIt(cortexLabel, region);
         itk::ImageRegionConstIterator<ImageType>      iIt(partialInput, region);
         itk::ImageRegionIterator<LabelImageType>      oIt(finalBones, region);
-        for (; !oIt.IsAtEnd(); ++mIt, ++bIt, ++cIt, ++iIt, ++oIt)
+        itk::ImageRegionIterator<LabelImageType>      sIt(singleBone, region);
+        for (; !oIt.IsAtEnd(); ++mIt, ++bIt, ++cIt, ++iIt, ++oIt, ++sIt)
         {
           if (iIt.Get() > background)
           {
             if (cIt.Get())
             {
               oIt.Set(3 * bone - 2);
+              sIt.Set(bone);
             }
             else if (bIt.Get())
             {
               oIt.Set(3 * bone - 1);
+              sIt.Set(bone);
             }
             else if (mIt.Get())
             {
               oIt.Set(3 * bone);
+              sIt.Set(bone);
             }
           }
           // else this is background
@@ -436,6 +468,41 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
       },
       nullptr);
     UpdateAndWrite(finalBones, boneFilename + "-label.nrrd", true, 2);
+
+    // now do level-set segmentation, using Descoteaux feature as the speed image
+    // start from the distance field of the existing segmentation
+    typename RealImageType::Pointer singleDist = sdf(erodedBone, boneFilename + "-erodedB-dist.nrrd", 2);
+
+    using GeodesicActiveContourFilterType = itk::GeodesicActiveContourLevelSetImageFilter<RealImageType, RealImageType>;
+    GeodesicActiveContourFilterType::Pointer geodesicActiveContour = GeodesicActiveContourFilterType::New();
+    geodesicActiveContour->SetPropagationScaling(10.0f);
+    //geodesicActiveContour->ReverseExpansionDirectionOn();
+    geodesicActiveContour->SetCurvatureScaling(1.0);
+    geodesicActiveContour->SetAdvectionScaling(10.0);
+    geodesicActiveContour->SetMaximumRMSError(1e-10);
+    geodesicActiveContour->SetNumberOfIterations(10 * corticalBoneThickness / avgSpacing);
+    geodesicActiveContour->SetInput(singleDist);
+    geodesicActiveContour->SetFeatureImage(desco);
+    std::cout << "MaximumPropagationTimeStep:" << geodesicActiveContour->GetMaximumPropagationTimeStep() << std::endl;
+    geodesicActiveContour->SetMaximumPropagationTimeStep(10 * geodesicActiveContour->GetMaximumPropagationTimeStep());
+    std::cout << "MaximumPropagationTimeStep:" << geodesicActiveContour->GetMaximumPropagationTimeStep() << std::endl;
+    geodesicActiveContour->SetSpeedImage(descoSpeed);
+    UpdateAndWrite(geodesicActiveContour->GetOutput(), boneFilename + "-levelSet-dist.nrrd", false, 1);
+
+    std::cout << "Max. no. iterations: " << geodesicActiveContour->GetNumberOfIterations() << std::endl;
+    std::cout << "Max. RMS error: " << geodesicActiveContour->GetMaximumRMSError() << std::endl;
+    std::cout << "No. elpased iterations: " << geodesicActiveContour->GetElapsedIterations() << std::endl;
+    std::cout << "RMS change: " << geodesicActiveContour->GetRMSChange() << std::endl;
+
+    FloatThresholdType::Pointer thresholder = FloatThresholdType::New();
+    thresholder->SetLowerThreshold(-FLT_MAX);
+    thresholder->SetUpperThreshold(0.0);
+    thresholder->SetOutsideValue(0);
+    thresholder->SetInsideValue(bone);
+    thresholder->SetInput(geodesicActiveContour->GetOutput());
+    UpdateAndWrite(thresholder->GetOutput(), boneFilename + "-levelSet-label.nrrd", true, 1);
+
+    return; // debug - do not spend time doing other bones
   }
   UpdateAndWrite(finalBones, outFilename + "-label.nrrd", true, 0); // always write
 }
