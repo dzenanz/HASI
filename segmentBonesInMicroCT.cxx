@@ -511,6 +511,8 @@ mainProcessing(typename ImageType::ConstPointer inImage, std::string outFilename
     // start from the distance field of the existing segmentation
     typename RealImageType::Pointer singleDist = sdf(erodedBone, boneFilename + "-erodedB-dist.nrrd", 2);
 
+    // crash TODO: singleDist now has paddedWholeImage, and safeBoneRegion is probably needed
+
     using GeodesicActiveContourFilterType = itk::GeodesicActiveContourLevelSetImageFilter<RealImageType, RealImageType>;
     GeodesicActiveContourFilterType::Pointer geodesicActiveContour = GeodesicActiveContourFilterType::New();
     geodesicActiveContour->SetPropagationScaling(10.0f);
