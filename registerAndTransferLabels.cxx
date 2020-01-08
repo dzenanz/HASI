@@ -107,26 +107,67 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using SizeType = typename LabelImageType::SizeType;
   using PointType = typename ImageType::PointType;
 
+  std::vector<PointType> inputLandmarks = readSlicerFiducials(inputBase + ".fcsv");
+  std::vector<PointType> atlasLandmarks = readSlicerFiducials(atlasBase + ".fcsv");
+  itkAssertOrThrowMacro(inputLandmarks.size() == 3, "There must be exactly 3 input landmarks");
+  itkAssertOrThrowMacro(atlasLandmarks.size() == 3, "There must be exactly 3 atlas landmarks");
+
+  using AffineTransformType = itk::AffineTransform<double, 3>;
+  using LandmarkBasedTransformInitializerType =
+    itk::LandmarkBasedTransformInitializer<AffineTransformType, ImageType, ImageType>;
+  typename LandmarkBasedTransformInitializerType::Pointer landmarkBasedTransformInitializer =
+    LandmarkBasedTransformInitializerType::New();
+
+  // using LandmarkContainerType = typename LandmarkBasedTransformInitializerType::LandmarkPointContainer;
+  // using LandmarkPointType = typename LandmarkBasedTransformInitializerType::LandmarkPointType;
+
+  // LandmarkContainerType fixedLandmarks;
+  // LandmarkContainerType movingLandmarks;
+
+  // LandmarkPointType fixedPoint;
+  // LandmarkPointType movingPoint;
+
+  landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
+  landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
+
+  // give the most weight to center of femur head, then to shaft, then to the dent
+  typename LandmarkBasedTransformInitializerType::LandmarkWeightType weights{ 1e9, 1, 1e-9 };
+  landmarkBasedTransformInitializer->SetLandmarkWeight(weights);
+
+  AffineTransformType::Pointer transform = AffineTransformType::New();
+  transform->SetIdentity();
+  landmarkBasedTransformInitializer->SetTransform(transform);
+  landmarkBasedTransformInitializer->InitializeTransform();
+
   typename ImageType::Pointer inImage = ReadImage<ImageType>(inputBase + "-bone1.nrrd");
   typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasBase + "-bone1.nrrd");
 
-  std::vector<PointType> iLandmarks = readSlicerFiducials(inputBase + ".fcsv");
-  std::vector<PointType> aLandmarks = readSlicerFiducials(atlasBase + ".fcsv");
+  // double avgSpacing = 1.0;
+  // for (unsigned d = 0; d < Dimension; d++)
+  //{
+  //  avgSpacing *= inImage->GetSpacing()[d];
+  //}
+  // avgSpacing = std::pow(avgSpacing, 1.0 / Dimension); // geometric average preserves voxel volume
+  // float epsDist = 0.001 * avgSpacing;                 // epsilon for distance comparisons
+  // RegionType wholeImage = inImage->GetLargestPossibleRegion();
 
-  double avgSpacing = 1.0;
-  for (unsigned d = 0; d < Dimension; d++)
-  {
-    avgSpacing *= inImage->GetSpacing()[d];
-  }
-  avgSpacing = std::pow(avgSpacing, 1.0 / Dimension); // geometric average preserves voxel volume
-  float epsDist = 0.001 * avgSpacing;                 // epsilon for distance comparisons
+  typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
-  RegionType wholeImage = inImage->GetLargestPossibleRegion();
+  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " resampling the atlas into the space of input image" << std::endl;
 
-  typename ImageType::Pointer atlasLabels = ReadImage<ImageType>(atlasBase + "-label.nrrd");
-  // resample into the space of inImage
+  using ResampleFilterType = itk::ResampleImageFilter<LabelImageType, LabelImageType, double>;
+  ResampleFilterType::Pointer resampleFilter = ResampleFilterType::New();
+  resampleFilter->SetInput(atlasLabels);
+  resampleFilter->SetTransform(transform);
+  resampleFilter->SetReferenceImage(inImage);
+  resampleFilter->SetUseReferenceImage(true);
+  resampleFilter->SetDefaultPixelValue(-4096);
+  resampleFilter->Update();
 
-  WriteImage(atlasLabels, outputBase + "-label.nrrd", true);
+  typename LabelImageType::Pointer segmentedImage = resampleFilter->GetOutput();
+
+  WriteImage(segmentedImage, outputBase + "-label.nrrd", true);
 }
 
 int
