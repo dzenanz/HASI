@@ -127,16 +127,10 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   landmarkBasedTransformInitializer->SetTransform(transform);
   landmarkBasedTransformInitializer->InitializeTransform();
 
-  // now calculate translation using first point only
-  typename TransformType::Pointer translationOnly = TransformType::New();
-  landmarkBasedTransformInitializer->SetTransform(translationOnly);
-  inputLandmarks.resize(1);
-  atlasLandmarks.resize(1);
-  landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
-  landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
-  landmarkBasedTransformInitializer->InitializeTransform();
-
-  transform->Translate(translationOnly->GetTranslation());
+  // force rotation to be around center of femur head
+  transform->SetCenter(inputLandmarks.front());
+  // and make sure that the other corresponding point maps to it perfectly
+  transform->SetTranslation(atlasLandmarks.front() - inputLandmarks.front());
 
   using TransformWriterType = itk::TransformFileWriterTemplate<double>;
   typename TransformWriterType::Pointer transformWriter = TransformWriterType::New();
