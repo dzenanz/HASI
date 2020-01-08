@@ -119,22 +119,24 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename LandmarkBasedTransformInitializerType::Pointer landmarkBasedTransformInitializer =
     LandmarkBasedTransformInitializerType::New();
 
-  //// we need more landmarks for AffineTransform which supports weights
-  //// so duplicate the first (pivotal) point
-  //inputLandmarks.push_back(inputLandmarks.front());
-  //atlasLandmarks.push_back(atlasLandmarks.front());
-
   landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
   landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
-
-  // give the most weight to center of femur head, then to shaft, then to the dent
-  typename LandmarkBasedTransformInitializerType::LandmarkWeightType weights{ 1e9, 1, 1e-9, 1e9 };
-  landmarkBasedTransformInitializer->SetLandmarkWeight(weights);
 
   typename TransformType::Pointer transform = TransformType::New();
   transform->SetIdentity();
   landmarkBasedTransformInitializer->SetTransform(transform);
   landmarkBasedTransformInitializer->InitializeTransform();
+
+  // now calculate translation using first point only
+  typename TransformType::Pointer translationOnly = TransformType::New();
+  landmarkBasedTransformInitializer->SetTransform(translationOnly);
+  inputLandmarks.resize(1);
+  atlasLandmarks.resize(1);
+  landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
+  landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
+  landmarkBasedTransformInitializer->InitializeTransform();
+
+  transform->SetTranslation(translationOnly->GetTranslation());
 
   using TransformWriterType = itk::TransformFileWriterTemplate<double>;
   typename TransformWriterType::Pointer transformWriter = TransformWriterType::New();
