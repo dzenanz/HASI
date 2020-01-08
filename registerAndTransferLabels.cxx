@@ -127,11 +127,16 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // LandmarkPointType fixedPoint;
   // LandmarkPointType movingPoint;
 
+  // we need more landmarks for AffineTransform which supports weights
+  // so duplicate the first (pivotal) point
+  inputLandmarks.push_back(inputLandmarks.front());
+  atlasLandmarks.push_back(atlasLandmarks.front());
+
   landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
   landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
 
   // give the most weight to center of femur head, then to shaft, then to the dent
-  typename LandmarkBasedTransformInitializerType::LandmarkWeightType weights{ 1e9, 1, 1e-9 };
+  typename LandmarkBasedTransformInitializerType::LandmarkWeightType weights{ 1e9, 1, 1e-9, 1e9 };
   landmarkBasedTransformInitializer->SetLandmarkWeight(weights);
 
   AffineTransformType::Pointer transform = AffineTransformType::New();
