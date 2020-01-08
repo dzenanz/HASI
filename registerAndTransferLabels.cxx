@@ -136,7 +136,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
   landmarkBasedTransformInitializer->InitializeTransform();
 
-  transform->SetTranslation(translationOnly->GetTranslation());
+  transform->Translate(translationOnly->GetTranslation());
 
   using TransformWriterType = itk::TransformFileWriterTemplate<double>;
   typename TransformWriterType::Pointer transformWriter = TransformWriterType::New();
