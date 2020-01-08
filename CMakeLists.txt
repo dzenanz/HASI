@@ -22,6 +22,7 @@ find_package(ITK 5 REQUIRED
     ITKImageGrid
     ITKLabelMap
     ITKRegistrationCommon
+    ITKIOTransformInsightLegacy
     BoneEnhancement
     ITKIOMeta
     ITKIONRRD

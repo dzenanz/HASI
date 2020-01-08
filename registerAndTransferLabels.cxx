@@ -5,6 +5,7 @@
 #include "itkImageFileWriter.h"
 #include "itkLandmarkBasedTransformInitializer.h"
 #include "itkResampleImageFilter.h"
+#include "itkTransformFileWriter.h"
 
 
 auto startTime = std::chrono::steady_clock::now();
@@ -112,25 +113,16 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   itkAssertOrThrowMacro(inputLandmarks.size() == 3, "There must be exactly 3 input landmarks");
   itkAssertOrThrowMacro(atlasLandmarks.size() == 3, "There must be exactly 3 atlas landmarks");
 
-  using AffineTransformType = itk::AffineTransform<double, 3>;
+  using TransformType = itk::VersorRigid3DTransform<double>;
   using LandmarkBasedTransformInitializerType =
-    itk::LandmarkBasedTransformInitializer<AffineTransformType, ImageType, ImageType>;
+    itk::LandmarkBasedTransformInitializer<TransformType, ImageType, ImageType>;
   typename LandmarkBasedTransformInitializerType::Pointer landmarkBasedTransformInitializer =
     LandmarkBasedTransformInitializerType::New();
 
-  // using LandmarkContainerType = typename LandmarkBasedTransformInitializerType::LandmarkPointContainer;
-  // using LandmarkPointType = typename LandmarkBasedTransformInitializerType::LandmarkPointType;
-
-  // LandmarkContainerType fixedLandmarks;
-  // LandmarkContainerType movingLandmarks;
-
-  // LandmarkPointType fixedPoint;
-  // LandmarkPointType movingPoint;
-
-  // we need more landmarks for AffineTransform which supports weights
-  // so duplicate the first (pivotal) point
-  inputLandmarks.push_back(inputLandmarks.front());
-  atlasLandmarks.push_back(atlasLandmarks.front());
+  //// we need more landmarks for AffineTransform which supports weights
+  //// so duplicate the first (pivotal) point
+  //inputLandmarks.push_back(inputLandmarks.front());
+  //atlasLandmarks.push_back(atlasLandmarks.front());
 
   landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
   landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
@@ -139,22 +131,19 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename LandmarkBasedTransformInitializerType::LandmarkWeightType weights{ 1e9, 1, 1e-9, 1e9 };
   landmarkBasedTransformInitializer->SetLandmarkWeight(weights);
 
-  AffineTransformType::Pointer transform = AffineTransformType::New();
+  typename TransformType::Pointer transform = TransformType::New();
   transform->SetIdentity();
   landmarkBasedTransformInitializer->SetTransform(transform);
   landmarkBasedTransformInitializer->InitializeTransform();
 
-  typename ImageType::Pointer inImage = ReadImage<ImageType>(inputBase + "-bone1.nrrd");
-  typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasBase + "-bone1.nrrd");
+  using TransformWriterType = itk::TransformFileWriterTemplate<double>;
+  typename TransformWriterType::Pointer transformWriter = TransformWriterType::New();
+  transformWriter->SetInput(transform);
+  transformWriter->SetFileName(outputBase + ".tfm");
+  transformWriter->Update();
 
-  // double avgSpacing = 1.0;
-  // for (unsigned d = 0; d < Dimension; d++)
-  //{
-  //  avgSpacing *= inImage->GetSpacing()[d];
-  //}
-  // avgSpacing = std::pow(avgSpacing, 1.0 / Dimension); // geometric average preserves voxel volume
-  // float epsDist = 0.001 * avgSpacing;                 // epsilon for distance comparisons
-  // RegionType wholeImage = inImage->GetLargestPossibleRegion();
+  typename ImageType::Pointer inImage = ReadImage<ImageType>(inputBase + "-bone1.nrrd");
+  //typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasBase + "-bone1.nrrd");
 
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
