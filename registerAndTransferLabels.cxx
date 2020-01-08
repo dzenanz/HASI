@@ -13,7 +13,7 @@ template <typename TImage>
 itk::SmartPointer<TImage>
 ReadImage(std::string filename)
 {
-  auto diff = std::chrono::steady_clock::now() - startTime;
+  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Reading " << filename << std::endl;
 
   using ReaderType = itk::ImageFileReader<TImage>;
@@ -32,7 +32,7 @@ template <typename TImage>
 void
 WriteImage(itk::SmartPointer<TImage> out, std::string filename, bool compress)
 {
-  auto diff = std::chrono::steady_clock::now() - startTime;
+  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Writing " << filename << std::endl;
 
   using WriterType = itk::ImageFileWriter<TImage>;
@@ -98,7 +98,7 @@ readSlicerFiducials(std::string fileName)
 
 template <typename ImageType>
 void
-mainProcessing(std::string inputFileName, std::string outFilename, std::string atlasDirectory)
+mainProcessing(std::string inputBase, std::string outputBase, std::string atlasBase)
 {
   constexpr unsigned Dimension = ImageType::ImageDimension;
   using LabelImageType = itk::Image<unsigned char, Dimension>;
@@ -107,9 +107,11 @@ mainProcessing(std::string inputFileName, std::string outFilename, std::string a
   using SizeType = typename LabelImageType::SizeType;
   using PointType = typename ImageType::PointType;
 
-  typename ImageType::Pointer inImage = ReadImage<ImageType>(inputFileName);
-  typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasDirectory + "/907-L-bone1.nrrd");
-  std::vector<PointType> aLandmarks = readSlicerFiducials(atlasDirectory + "/907-L.fcsv");
+  typename ImageType::Pointer inImage = ReadImage<ImageType>(inputBase + "-bone1.nrrd");
+  typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasBase + "-bone1.nrrd");
+
+  std::vector<PointType> iLandmarks = readSlicerFiducials(inputBase + ".fcsv");
+  std::vector<PointType> aLandmarks = readSlicerFiducials(atlasBase + ".fcsv");
 
   double avgSpacing = 1.0;
   for (unsigned d = 0; d < Dimension; d++)
@@ -121,10 +123,10 @@ mainProcessing(std::string inputFileName, std::string outFilename, std::string a
 
   RegionType wholeImage = inImage->GetLargestPossibleRegion();
 
-  typename ImageType::Pointer atlasLabels = ReadImage<ImageType>(atlasDirectory + "/907-L-label.nrrd");
+  typename ImageType::Pointer atlasLabels = ReadImage<ImageType>(atlasBase + "-label.nrrd");
   // resample into the space of inImage
 
-  WriteImage(atlasLabels, outFilename, true);
+  WriteImage(atlasLabels, outputBase + "-label.nrrd", true);
 }
 
 int
@@ -132,10 +134,8 @@ main(int argc, char * argv[])
 {
   if (argc < 4)
   {
-    std::cerr << "Usage: " << std::endl;
-    std::cerr << argv[0];
-    std::cerr << " <InputFileName> <OutputFileName> <AtlasDirectory>";
-    std::cerr << std::endl;
+    std::cerr << "Usage:\n" << argv[0];
+    std::cerr << " <InputBase> <OutputBase> <AtlasBase>" << std::endl;
     return EXIT_FAILURE;
   }
 
