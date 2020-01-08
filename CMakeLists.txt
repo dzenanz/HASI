@@ -21,6 +21,7 @@ find_package(ITK 5 REQUIRED
     ITKRegionGrowing
     ITKImageGrid
     ITKLabelMap
+    ITKRegistrationCommon
     BoneEnhancement
     ITKIOMeta
     ITKIONRRD
@@ -28,13 +29,17 @@ find_package(ITK 5 REQUIRED
 include(${ITK_USE_FILE})
 
 add_executable(segmentBonesInMicroCT segmentBonesInMicroCT.cxx)
+add_executable(registerAndTransferLabels registerAndTransferLabels.cxx)
 
 target_link_libraries(segmentBonesInMicroCT ${ITK_LIBRARIES})
+target_link_libraries(registerAndTransferLabels ${ITK_LIBRARIES})
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT segmentBonesInMicroCT)
 
 set(INSTALL_RUNTIME_DESTINATION bin CACHE STRING "Install destination")
 
 install(
-  TARGETS segmentBonesInMicroCT
+  TARGETS
+    segmentBonesInMicroCT
+    registerAndTransferLabels
   DESTINATION ${INSTALL_RUNTIME_DESTINATION}
   )
