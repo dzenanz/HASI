@@ -8,7 +8,7 @@
 
 #include "itkImageRegistrationMethod.h"
 #include "itkRegularStepGradientDescentOptimizer.h"
-#include "itkMattesMutualInformationImageToImageMetric.h"
+#include "itkMeanSquaresImageToImageMetric.h"
 #include "itkResampleImageFilter.h"
 #include "itkCommand.h"
 #include "itkBSplineResampleImageFunction.h"
@@ -208,7 +208,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using CoordinateRepType = double;
   using DeformableTransformType = itk::BSplineTransform<CoordinateRepType, Dimension, SplineOrder>;
   using OptimizerType = itk::RegularStepGradientDescentOptimizer;
-  using MetricType = itk::MattesMutualInformationImageToImageMetric<ImageType, ImageType>; // TODO: use MSE
+  using MetricType = itk::MeanSquaresImageToImageMetric<ImageType, ImageType>;
   using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
   using RegistrationType = itk::ImageRegistrationMethod<ImageType, ImageType>;
 
@@ -227,8 +227,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using IdentityTransformType = itk::IdentityTransform<double, Dimension>;
   IdentityTransformType::Pointer identityTransform = IdentityTransformType::New();
 
-  // Setup the metric parameters
-  metric->SetNumberOfHistogramBins(50);
   metric->ReinitializeSeed(76926294);
 
   ImageType::RegionType fixedRegion = inputBone1->GetBufferedRegion();
@@ -236,10 +234,9 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   registration->SetInitialTransformParameters(rigidTransform->GetParameters());
   registration->SetTransform(rigidTransform);
 
-  //
-  //  Define optimizer normaliztion to compensate for different dynamic range
+
+  //  Define optimizer normalization to compensate for different dynamic range
   //  of rotations and translations.
-  //
   using OptimizerScalesType = OptimizerType::ScalesType;
   OptimizerScalesType optimizerScales(rigidTransform->GetNumberOfParameters());
   const double        translationScale = 1.0 / 1000.0;
