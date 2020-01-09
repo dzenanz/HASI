@@ -139,7 +139,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   transformWriter->Update();
 
   typename ImageType::Pointer inImage = ReadImage<ImageType>(inputBase + "-bone1.nrrd");
-  //typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasBase + "-bone1.nrrd");
+  typename ImageType::Pointer atlasBone1 = ReadImage<ImageType>(atlasBase + "-bone1.nrrd");
 
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
