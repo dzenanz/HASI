@@ -148,7 +148,7 @@ public:
       return;
     }
     std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
-    std::cout << diff.count() << optimizer->GetCurrentIteration() << "   ";
+    std::cout << diff.count() << "  " << optimizer->GetCurrentIteration() << "  ";
     std::cout << optimizer->GetValue() << std::endl;
   }
 };
