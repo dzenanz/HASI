@@ -197,9 +197,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename LabelImageType::Pointer inputLabels = ReadImage<LabelImageType>(inputBase + "-label.nrrd");
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
-  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " resampling the atlas into the space of input image" << std::endl;
-
 
   // now comes the registration part, first rigid (initialized by landmarks as computed above)
   // then affine and finaly deformable BSpline
@@ -269,15 +266,12 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
   optimizer->AddObserver(itk::IterationEvent(), observer);
 
-
-  std::cout << "Starting Rigid Registration " << std::endl;
+  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Starting Rigid Registration " << std::endl;
   registration->Update();
-
-  std::cout << "Optimizer stop condition = " << registration->GetOptimizer()->GetStopConditionDescription()
-            << std::endl;
-  std::cout << "Rigid Registration completed" << std::endl;
-  std::cout << std::endl;
-
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Rigid Registration completed" << std::endl;
+  std::cout << "Stop condition = " << registration->GetOptimizer()->GetStopConditionDescription() << std::endl;
   rigidTransform->SetParameters(registration->GetLastTransformParameters());
   WriteTransform(rigidTransform, outputBase + "-rigid.tfm");
 
@@ -319,12 +313,11 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // image.
   metric->SetNumberOfSpatialSamples(50000L);
 
-  std::cout << "Starting Affine Registration " << std::endl;
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Starting Affine Registration" << std::endl;
   registration->Update();
-
-  std::cout << "Affine Registration completed" << std::endl;
-  std::cout << std::endl;
-
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Affine Registration completed" << std::endl;
   affineTransform->SetParameters(registration->GetLastTransformParameters());
   WriteTransform(affineTransform, outputBase + "-affine.tfm");
 
@@ -378,13 +371,11 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
   metric->SetNumberOfSpatialSamples(numberOfBSplineParameters * 100);
-
-  std::cout << std::endl << "Starting Deformable Registration Coarse Grid" << std::endl;
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Starting Deformable Registration Coarse Grid" << std::endl;
   registration->Update();
-
-  std::cout << "Deformable Registration Coarse Grid completed" << std::endl;
-  std::cout << std::endl;
-
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Deformable Registration Coarse Grid completed" << std::endl;
   OptimizerType::ParametersType finalParameters = registration->GetLastTransformParameters();
   bsplineTransformCoarse->SetParameters(finalParameters);
   WriteTransform(bsplineTransformCoarse, outputBase + "-BSplineCoarse.tfm");
@@ -409,6 +400,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   //  at the higher resolution from the lower resolution BSpline coefficients.
   //  Then a BSpline decomposition is done to obtain the BSpline coefficient of
   //  the higher resolution transform.
+  std::cout << "Upsampling BSpline parameters to high-resolution grid" << std::endl;
   unsigned int counter = 0;
   for (unsigned int k = 0; k < Dimension; k++)
   {
@@ -443,6 +435,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
       parametersHigh[counter++] = it.Get();
       ++it;
     }
+    diff = std::chrono::steady_clock::now() - startTime;
+    std::cout << diff.count() << " Dimension " << k << " complete" << std::endl;
   }
 
   optimizerScales = OptimizerScalesType(numberOfBSplineParameters);
@@ -452,7 +446,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   //  We now pass the parameters of the high resolution transform as the initial
   //  parameters to be used in a second stage of the registration process.
-  std::cout << "Starting Registration with high resolution transform" << std::endl;
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Starting Registration with high resolution transform" << std::endl;
   registration->SetInitialTransformParameters(bsplineTransformFine->GetParameters());
   registration->SetTransform(bsplineTransformFine);
 
@@ -471,16 +466,14 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
     std::sqrt(static_cast<double>(numberOfBSplineParameters) * static_cast<double>(numberOfPixels)));
   metric->SetNumberOfSpatialSamples(numberOfSamples);
   registration->Update();
-
-  std::cout << "Deformable Registration Fine Grid completed" << std::endl;
-  std::cout << std::endl;
-
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Deformable Registration Fine Grid completed" << std::endl;
   finalParameters = registration->GetLastTransformParameters();
   bsplineTransformFine->SetParameters(finalParameters);
   WriteTransform(bsplineTransformFine, outputBase + "-BSplineFine.tfm");
 
-
-  // Now resample the atlas labels into the input image space
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Resampling the atlas into the space of input image" << std::endl;
   using ResampleFilterType = itk::ResampleImageFilter<LabelImageType, LabelImageType, double>;
   ResampleFilterType::Pointer resampleFilter = ResampleFilterType::New();
   resampleFilter->SetInput(atlasLabels);
@@ -489,6 +482,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   resampleFilter->SetUseReferenceImage(true);
   resampleFilter->SetDefaultPixelValue(0);
   resampleFilter->Update();
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Resampling complete!" << std::endl;
   typename LabelImageType::Pointer segmentedImage = resampleFilter->GetOutput();
   WriteImage(segmentedImage, outputBase + "-A-label.nrrd", true);
 
