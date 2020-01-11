@@ -12,7 +12,7 @@
 #include "itkResampleImageFilter.h"
 #include "itkCommand.h"
 #include "itkBSplineResampleImageFunction.h"
-#include "itkBSplineDecompositionImageFilter.h"
+#include "itkCompositeTransform.h"
 #include "itkSquaredDifferenceImageFilter.h"
 #include "itkSqrtImageFilter.h"
 
@@ -323,7 +323,12 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
 
   //  Perform Deformable Registration
+  using CompositeTransformType = itk::CompositeTransform<>;
+
   typename DeformableTransformType::Pointer bsplineTransformCoarse = DeformableTransformType::New();
+  typename CompositeTransformType::Pointer  compositeTransform = CompositeTransformType::New();
+  compositeTransform->AddTransform(affineTransform);
+  compositeTransform->AddTransform(bsplineTransformCoarse);
 
   unsigned int numberOfGridNodesInOneDimensionCoarse = 5;
 
@@ -347,17 +352,15 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   unsigned int numberOfBSplineParameters = bsplineTransformCoarse->GetNumberOfParameters();
 
-
   optimizerScales = OptimizerScalesType(numberOfBSplineParameters);
   optimizerScales.Fill(1.0);
   optimizer->SetScales(optimizerScales);
 
-
   ParametersType initialDeformableTransformParameters(numberOfBSplineParameters);
   initialDeformableTransformParameters.Fill(0.0);
   bsplineTransformCoarse->SetParameters(initialDeformableTransformParameters);
-  registration->SetInitialTransformParameters(bsplineTransformCoarse->GetParameters());
-  registration->SetTransform(bsplineTransformCoarse);
+  registration->SetInitialTransformParameters(compositeTransform->GetParameters());
+  registration->SetTransform(compositeTransform);
 
   optimizer->SetMaximumStepLength(10.0);
   optimizer->SetMinimumStepLength(0.01);
@@ -377,8 +380,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Deformable Registration Coarse Grid completed" << std::endl;
   OptimizerType::ParametersType finalParameters = registration->GetLastTransformParameters();
-  bsplineTransformCoarse->SetParameters(finalParameters);
-  WriteTransform(bsplineTransformCoarse, outputBase + "-BSplineCoarse.tfm");
+  compositeTransform->SetParameters(finalParameters);
+  WriteTransform(compositeTransform, outputBase + "-AffineBSplineCoarse.tfm");
 
 
   DeformableTransformType::Pointer bsplineTransformFine = DeformableTransformType::New();
@@ -444,12 +447,15 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   optimizer->SetScales(optimizerScales);
   bsplineTransformFine->SetParameters(parametersHigh);
 
+  compositeTransform->RemoveTransform(); // remove bsplineTransformCoarse
+  compositeTransform->AddTransform(bsplineTransformFine);
+
   //  We now pass the parameters of the high resolution transform as the initial
   //  parameters to be used in a second stage of the registration process.
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Registration with high resolution transform" << std::endl;
-  registration->SetInitialTransformParameters(bsplineTransformFine->GetParameters());
-  registration->SetTransform(bsplineTransformFine);
+  registration->SetInitialTransformParameters(compositeTransform->GetParameters());
+  registration->SetTransform(compositeTransform);
 
   // The BSpline transform at fine scale has a very large number of parameters,
   // we use therefore a much larger number of samples to run this stage. In
@@ -469,15 +475,15 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Deformable Registration Fine Grid completed" << std::endl;
   finalParameters = registration->GetLastTransformParameters();
-  bsplineTransformFine->SetParameters(finalParameters);
-  WriteTransform(bsplineTransformFine, outputBase + "-BSplineFine.tfm");
+  compositeTransform->SetParameters(finalParameters);
+  WriteTransform(compositeTransform, outputBase + "-AffineBSplineFine.tfm");
 
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Resampling the atlas into the space of input image" << std::endl;
   using ResampleFilterType = itk::ResampleImageFilter<LabelImageType, LabelImageType, double>;
   ResampleFilterType::Pointer resampleFilter = ResampleFilterType::New();
   resampleFilter->SetInput(atlasLabels);
-  resampleFilter->SetTransform(bsplineTransformFine);
+  resampleFilter->SetTransform(compositeTransform);
   resampleFilter->SetReferenceImage(inputBone1);
   resampleFilter->SetUseReferenceImage(true);
   resampleFilter->SetDefaultPixelValue(0);
