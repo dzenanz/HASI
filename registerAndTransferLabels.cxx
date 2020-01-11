@@ -494,18 +494,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   std::cout << diff.count() << " Resampling complete!" << std::endl;
   typename LabelImageType::Pointer segmentedImage = resampleFilter->GetOutput();
   WriteImage(segmentedImage, outputBase + "-A-label.nrrd", true);
-
-
-  using DifferenceFilterType = itk::SquaredDifferenceImageFilter<LabelImageType, LabelImageType, ImageType>;
-  DifferenceFilterType::Pointer difference = DifferenceFilterType::New();
-  difference->SetInput1(inputLabels);
-  difference->SetInput2(segmentedImage);
-  using SqrtFilterType = itk::SqrtImageFilter<ImageType, LabelImageType>;
-  SqrtFilterType::Pointer sqrtFilter = SqrtFilterType::New();
-  sqrtFilter->SetInput(difference->GetOutput());
-  sqrtFilter->Update();
-  typename LabelImageType::Pointer diffImage = sqrtFilter->GetOutput();
-  WriteImage(diffImage, outputBase + "-diff-label.nrrd", true);
 }
 
 int
