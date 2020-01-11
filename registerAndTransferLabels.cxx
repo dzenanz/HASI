@@ -329,6 +329,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename CompositeTransformType::Pointer  compositeTransform = CompositeTransformType::New();
   compositeTransform->AddTransform(affineTransform);
   compositeTransform->AddTransform(bsplineTransformCoarse);
+  compositeTransform->SetOnlyMostRecentTransformToOptimizeOn();
 
   unsigned int numberOfGridNodesInOneDimensionCoarse = 5;
 
@@ -449,6 +450,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   compositeTransform->RemoveTransform(); // remove bsplineTransformCoarse
   compositeTransform->AddTransform(bsplineTransformFine);
+  compositeTransform->SetOnlyMostRecentTransformToOptimizeOn();
 
   //  We now pass the parameters of the high resolution transform as the initial
   //  parameters to be used in a second stage of the registration process.
