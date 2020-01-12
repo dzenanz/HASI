@@ -13,8 +13,8 @@
 #include "itkCommand.h"
 #include "itkBSplineResampleImageFunction.h"
 #include "itkCompositeTransform.h"
-#include "itkSquaredDifferenceImageFilter.h"
-#include "itkSqrtImageFilter.h"
+#include "itkSignedMaurerDistanceMapImageFilter.h"
+#include "itkCenteredTransformInitializer.h"
 
 auto startTime = std::chrono::steady_clock::now();
 
@@ -118,6 +118,42 @@ readSlicerFiducials(std::string fileName)
   return points;
 }
 
+template <typename LabelImageType>
+itk::SmartPointer<itk::Image<float, 3>>
+Bone1DistanceField(typename LabelImageType::Pointer allLabels, typename LabelImageType::RegionType bone1Region)
+{
+  typename LabelImageType::Pointer bone1whole = LabelImageType::New();
+  bone1whole->CopyInformation(allLabels);
+  bone1whole->SetRegions(bone1Region);
+  bone1whole->Allocate(true);
+
+  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+  mt->ParallelizeImageRegion<LabelImageType::ImageDimension>(
+    bone1Region,
+    [bone1whole, allLabels](const typename LabelImageType::RegionType region) {
+      itk::ImageRegionConstIterator<LabelImageType> iIt(allLabels, region);
+      itk::ImageRegionIterator<LabelImageType>      oIt(bone1whole, region);
+      for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
+      {
+        auto label = iIt.Get();
+        if (label >= 1 && label <= 3)
+        {
+          oIt.Set(1);
+        }
+      }
+    },
+    nullptr);
+
+  using RealImageType = itk::Image<float, 3>;
+  using DistanceFieldType = itk::SignedMaurerDistanceMapImageFilter<LabelImageType, RealImageType>;
+  typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
+  distF->SetInput(bone1whole);
+  distF->SetSquaredDistance(false);
+  distF->SetInsideIsPositive(true);
+  distF->Update();
+  return distF->GetOutput();
+}
+
 class CommandIterationUpdate : public itk::Command
 {
 public:
@@ -159,6 +195,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 {
   constexpr unsigned Dimension = ImageType::ImageDimension;
   using LabelImageType = itk::Image<unsigned char, Dimension>;
+  using RealImageType = itk::Image<float, 3>;
   using RegionType = typename LabelImageType::RegionType;
   using IndexType = typename LabelImageType::IndexType;
   using SizeType = typename LabelImageType::SizeType;
@@ -197,39 +234,54 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename LabelImageType::Pointer inputLabels = ReadImage<LabelImageType>(inputBase + "-label.nrrd");
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
+  typename RealImageType::Pointer inputDF1 =
+    Bone1DistanceField<LabelImageType>(inputLabels, inputBone1->GetBufferedRegion());
+  typename RealImageType::Pointer atlasDF1 =
+    Bone1DistanceField<LabelImageType>(atlasLabels, atlasBone1->GetBufferedRegion());
 
-  // now comes the registration part, first rigid (initialized by landmarks as computed above)
-  // then affine and finaly deformable BSpline
+
+  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Starting Rigid Transform Initialization " << std::endl;
+  using TransformInitializerType = itk::CenteredTransformInitializer<RigidTransformType, RealImageType, RealImageType>;
+  typename TransformInitializerType::Pointer initializer = TransformInitializerType::New();
+  rigidTransform->SetIdentity();
+  initializer->SetTransform(rigidTransform);
+  initializer->SetFixedImage(inputDF1);
+  initializer->SetMovingImage(atlasDF1);
+  initializer->MomentsOn();
+  initializer->InitializeTransform();
+  WriteTransform(rigidTransform, outputBase + "-moments.tfm");
+
+
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
   constexpr unsigned int SplineOrder = 3;
   using CoordinateRepType = double;
   using DeformableTransformType = itk::BSplineTransform<CoordinateRepType, Dimension, SplineOrder>;
   using OptimizerType = itk::RegularStepGradientDescentOptimizer;
-  using MetricType = itk::MeanSquaresImageToImageMetric<ImageType, ImageType>;
-  using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
-  using RegistrationType = itk::ImageRegistrationMethod<ImageType, ImageType>;
+  using RealMetricType = itk::MeanSquaresImageToImageMetric<RealImageType, RealImageType>;
+  using RealInterpolatorType = itk::LinearInterpolateImageFunction<RealImageType, double>;
+  using RealRegistrationType = itk::ImageRegistrationMethod<RealImageType, RealImageType>;
 
-  typename MetricType::Pointer       metric = MetricType::New();
-  typename OptimizerType::Pointer    optimizer = OptimizerType::New();
-  typename InterpolatorType::Pointer interpolator = InterpolatorType::New();
-  typename RegistrationType::Pointer registration = RegistrationType::New();
+  typename RealMetricType::Pointer metric1 = RealMetricType::New();
+  metric1->ReinitializeSeed(76926294);
+  typename OptimizerType::Pointer        optimizer = OptimizerType::New();
+  typename RealInterpolatorType::Pointer interpolator1 = RealInterpolatorType::New();
+  typename RealRegistrationType::Pointer registration1 = RealRegistrationType::New();
 
-  registration->SetMetric(metric);
-  registration->SetOptimizer(optimizer);
-  registration->SetInterpolator(interpolator);
-  registration->SetFixedImage(inputBone1);
-  registration->SetMovingImage(atlasBone1);
+  registration1->SetMetric(metric1);
+  registration1->SetOptimizer(optimizer);
+  registration1->SetInterpolator(interpolator1);
+  registration1->SetFixedImage(inputDF1);
+  registration1->SetMovingImage(atlasDF1);
 
   // Auxiliary identity transform.
   using IdentityTransformType = itk::IdentityTransform<double, Dimension>;
   IdentityTransformType::Pointer identityTransform = IdentityTransformType::New();
 
-  metric->ReinitializeSeed(76926294);
-
   ImageType::RegionType fixedRegion = inputBone1->GetBufferedRegion();
-  registration->SetFixedImageRegion(fixedRegion);
-  registration->SetInitialTransformParameters(rigidTransform->GetParameters());
-  registration->SetTransform(rigidTransform);
+  registration1->SetFixedImageRegion(fixedRegion);
+  registration1->SetInitialTransformParameters(rigidTransform->GetParameters());
+  registration1->SetTransform(rigidTransform);
 
 
   //  Define optimizer normalization to compensate for different dynamic range
@@ -258,21 +310,21 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // Regulating the number of samples in the Metric is equivalent to performing
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
-  metric->SetNumberOfSpatialSamples(10000L);
-  metric->SetUseFixedImageSamplesIntensityThreshold(-1000);
+  metric1->SetNumberOfSpatialSamples(10000L);
+  metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
   // metric->SetMovingImageMask(atlasLabels); // TODO: make this work
 
   // Create the Command observer and register it with the optimizer.
   CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
   optimizer->AddObserver(itk::IterationEvent(), observer);
 
-  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
+  diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Rigid Registration " << std::endl;
-  registration->Update();
+  registration1->Update();
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Rigid Registration completed" << std::endl;
-  std::cout << "Stop condition = " << registration->GetOptimizer()->GetStopConditionDescription() << std::endl;
-  rigidTransform->SetParameters(registration->GetLastTransformParameters());
+  std::cout << "Stop condition = " << registration1->GetOptimizer()->GetStopConditionDescription() << std::endl;
+  rigidTransform->SetParameters(registration1->GetLastTransformParameters());
   WriteTransform(rigidTransform, outputBase + "-rigid.tfm");
 
 
@@ -282,8 +334,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   affineTransform->SetTranslation(rigidTransform->GetTranslation());
   affineTransform->SetMatrix(rigidTransform->GetMatrix());
 
-  registration->SetTransform(affineTransform);
-  registration->SetInitialTransformParameters(affineTransform->GetParameters());
+  registration1->SetTransform(affineTransform);
+  registration1->SetInitialTransformParameters(affineTransform->GetParameters());
 
   optimizerScales = OptimizerScalesType(affineTransform->GetNumberOfParameters());
   optimizerScales[0] = 1.0;
@@ -311,14 +363,14 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // Regulating the number of samples in the Metric is equivalent to performing
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
-  metric->SetNumberOfSpatialSamples(50000L);
+  metric1->SetNumberOfSpatialSamples(50000L);
 
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Affine Registration" << std::endl;
-  registration->Update();
+  registration1->Update();
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Affine Registration completed" << std::endl;
-  affineTransform->SetParameters(registration->GetLastTransformParameters());
+  affineTransform->SetParameters(registration1->GetLastTransformParameters());
   WriteTransform(affineTransform, outputBase + "-affine.tfm");
 
 
@@ -360,8 +412,23 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   ParametersType initialDeformableTransformParameters(numberOfBSplineParameters);
   initialDeformableTransformParameters.Fill(0.0);
   bsplineTransformCoarse->SetParameters(initialDeformableTransformParameters);
-  registration->SetInitialTransformParameters(compositeTransform->GetParameters());
-  registration->SetTransform(compositeTransform);
+
+  // for deformable registration part, we want actual bone intensities
+  using MetricType = itk::MeanSquaresImageToImageMetric<ImageType, ImageType>;
+  typename MetricType::Pointer metric2 = MetricType::New();
+  metric2->ReinitializeSeed(76926294);
+  using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
+  typename InterpolatorType::Pointer interpolator2 = InterpolatorType::New();
+  using RegistrationType = itk::ImageRegistrationMethod<ImageType, ImageType>;
+  typename RegistrationType::Pointer registration2 = RegistrationType::New();
+  registration2->SetMetric(metric2);
+  registration2->SetOptimizer(optimizer);
+  registration2->SetInterpolator(interpolator2);
+  registration2->SetInitialTransformParameters(compositeTransform->GetParameters());
+  registration2->SetTransform(compositeTransform);
+  registration2->SetFixedImageRegion(fixedRegion);
+  registration2->SetFixedImage(inputBone1);
+  registration2->SetMovingImage(atlasBone1);
 
   optimizer->SetMaximumStepLength(10.0);
   optimizer->SetMinimumStepLength(0.01);
@@ -374,13 +441,13 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // Regulating the number of samples in the Metric is equivalent to performing
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
-  metric->SetNumberOfSpatialSamples(numberOfBSplineParameters * 100);
+  metric2->SetNumberOfSpatialSamples(numberOfBSplineParameters * 100);
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Deformable Registration Coarse Grid" << std::endl;
-  registration->Update();
+  registration2->Update();
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Deformable Registration Coarse Grid completed" << std::endl;
-  OptimizerType::ParametersType finalParameters = registration->GetLastTransformParameters();
+  OptimizerType::ParametersType finalParameters = registration2->GetLastTransformParameters();
   compositeTransform->SetParameters(finalParameters);
   WriteTransform(compositeTransform, outputBase + "-AffineBSplineCoarse.tfm");
 
@@ -456,8 +523,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   //  parameters to be used in a second stage of the registration process.
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Registration with high resolution transform" << std::endl;
-  registration->SetInitialTransformParameters(compositeTransform->GetParameters());
-  registration->SetTransform(compositeTransform);
+  registration2->SetInitialTransformParameters(compositeTransform->GetParameters());
+  registration2->SetTransform(compositeTransform);
 
   // The BSpline transform at fine scale has a very large number of parameters,
   // we use therefore a much larger number of samples to run this stage. In
@@ -472,11 +539,11 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   const unsigned int numberOfPixels = fixedRegion.GetNumberOfPixels();
   const auto         numberOfSamples = static_cast<unsigned long>(
     std::sqrt(static_cast<double>(numberOfBSplineParameters) * static_cast<double>(numberOfPixels)));
-  metric->SetNumberOfSpatialSamples(numberOfSamples);
-  registration->Update();
+  metric2->SetNumberOfSpatialSamples(numberOfSamples);
+  registration2->Update();
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Deformable Registration Fine Grid completed" << std::endl;
-  finalParameters = registration->GetLastTransformParameters();
+  finalParameters = registration2->GetLastTransformParameters();
   compositeTransform->SetParameters(finalParameters);
   WriteTransform(compositeTransform, outputBase + "-AffineBSplineFine.tfm");
 
