@@ -200,13 +200,14 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using IndexType = typename LabelImageType::IndexType;
   using SizeType = typename LabelImageType::SizeType;
   using PointType = typename ImageType::PointType;
+  using RigidTransformType = itk::VersorRigid3DTransform<double>;
+  typename RigidTransformType::Pointer rigidTransform = RigidTransformType::New();
 
   std::vector<PointType> inputLandmarks = readSlicerFiducials(inputBase + ".fcsv");
   std::vector<PointType> atlasLandmarks = readSlicerFiducials(atlasBase + ".fcsv");
   itkAssertOrThrowMacro(inputLandmarks.size() == 3, "There must be exactly 3 input landmarks");
   itkAssertOrThrowMacro(atlasLandmarks.size() == 3, "There must be exactly 3 atlas landmarks");
 
-  using RigidTransformType = itk::VersorRigid3DTransform<double>;
   using LandmarkBasedTransformInitializerType =
     itk::LandmarkBasedTransformInitializer<RigidTransformType, ImageType, ImageType>;
   typename LandmarkBasedTransformInitializerType::Pointer landmarkBasedTransformInitializer =
@@ -215,7 +216,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   landmarkBasedTransformInitializer->SetFixedLandmarks(inputLandmarks);
   landmarkBasedTransformInitializer->SetMovingLandmarks(atlasLandmarks);
 
-  typename RigidTransformType::Pointer rigidTransform = RigidTransformType::New();
   rigidTransform->SetIdentity();
   landmarkBasedTransformInitializer->SetTransform(rigidTransform);
   landmarkBasedTransformInitializer->InitializeTransform();
@@ -238,19 +238,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
     Bone1DistanceField<LabelImageType>(inputLabels, inputBone1->GetBufferedRegion());
   typename RealImageType::Pointer atlasDF1 =
     Bone1DistanceField<LabelImageType>(atlasLabels, atlasBone1->GetBufferedRegion());
-
-
-  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Starting Rigid Transform Initialization " << std::endl;
-  using TransformInitializerType = itk::CenteredTransformInitializer<RigidTransformType, RealImageType, RealImageType>;
-  typename TransformInitializerType::Pointer initializer = TransformInitializerType::New();
-  rigidTransform->SetIdentity();
-  initializer->SetTransform(rigidTransform);
-  initializer->SetFixedImage(inputDF1);
-  initializer->SetMovingImage(atlasDF1);
-  initializer->MomentsOn();
-  initializer->InitializeTransform();
-  WriteTransform(rigidTransform, outputBase + "-moments.tfm");
 
 
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
@@ -318,7 +305,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
   optimizer->AddObserver(itk::IterationEvent(), observer);
 
-  diff = std::chrono::steady_clock::now() - startTime;
+  std::chrono::duration<double> diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Rigid Registration " << std::endl;
   registration1->Update();
   diff = std::chrono::steady_clock::now() - startTime;
