@@ -299,7 +299,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // image.
   metric1->SetNumberOfSpatialSamples(10000L);
   metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
-  // metric->SetMovingImageMask(atlasLabels); // TODO: make this work
 
   // Create the Command observer and register it with the optimizer.
   CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
@@ -404,6 +403,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using MetricType = itk::MeanSquaresImageToImageMetric<ImageType, ImageType>;
   typename MetricType::Pointer metric2 = MetricType::New();
   metric2->ReinitializeSeed(76926294);
+  // metric2->SetMovingImageMask(atlasLabels); // TODO: make this work
   using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
   typename InterpolatorType::Pointer interpolator2 = InterpolatorType::New();
   using RegistrationType = itk::ImageRegistrationMethod<ImageType, ImageType>;
