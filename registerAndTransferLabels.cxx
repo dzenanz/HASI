@@ -416,7 +416,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   inputMask->SetImage(inputBone1Label);
   atlasMask->SetImage(atlasBone1Label);
   metric2->SetFixedImageMask(inputMask.GetPointer());
-  metric2->SetMovingImageMask(atlasMask.GetPointer());
+  //metric2->SetMovingImageMask(atlasMask.GetPointer());
 
   using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
   typename InterpolatorType::Pointer interpolator2 = InterpolatorType::New();
