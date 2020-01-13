@@ -14,7 +14,7 @@
 #include "itkBSplineResampleImageFunction.h"
 #include "itkCompositeTransform.h"
 #include "itkSignedMaurerDistanceMapImageFilter.h"
-#include "itkCenteredTransformInitializer.h"
+#include "itkImageMaskSpatialObject.h"
 
 auto startTime = std::chrono::steady_clock::now();
 
@@ -120,9 +120,14 @@ readSlicerFiducials(std::string fileName)
 
 template <typename LabelImageType>
 itk::SmartPointer<itk::Image<float, 3>>
-Bone1DistanceField(typename LabelImageType::Pointer allLabels, typename LabelImageType::RegionType bone1Region)
+Bone1DistanceField(typename LabelImageType::Pointer    allLabels,
+                   typename LabelImageType::RegionType bone1Region,
+                   typename LabelImageType::Pointer    bone1whole)
 {
-  typename LabelImageType::Pointer bone1whole = LabelImageType::New();
+  if (bone1whole.IsNull())
+  {
+    bone1whole = LabelImageType::New();
+  }
   bone1whole->CopyInformation(allLabels);
   bone1whole->SetRegions(bone1Region);
   bone1whole->Allocate(true);
@@ -233,11 +238,13 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   typename LabelImageType::Pointer inputLabels = ReadImage<LabelImageType>(inputBase + "-label.nrrd");
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
+  typename LabelImageType::Pointer inputBone1Label = LabelImageType::New();
+  typename LabelImageType::Pointer atlasBone1Label = LabelImageType::New();
 
   typename RealImageType::Pointer inputDF1 =
-    Bone1DistanceField<LabelImageType>(inputLabels, inputBone1->GetBufferedRegion());
+    Bone1DistanceField<LabelImageType>(inputLabels, inputBone1->GetBufferedRegion(), inputBone1Label);
   typename RealImageType::Pointer atlasDF1 =
-    Bone1DistanceField<LabelImageType>(atlasLabels, atlasBone1->GetBufferedRegion());
+    Bone1DistanceField<LabelImageType>(atlasLabels, atlasBone1->GetBufferedRegion(), atlasBone1Label);
 
 
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
@@ -403,7 +410,14 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using MetricType = itk::MeanSquaresImageToImageMetric<ImageType, ImageType>;
   typename MetricType::Pointer metric2 = MetricType::New();
   metric2->ReinitializeSeed(76926294);
-  // metric2->SetMovingImageMask(atlasLabels); // TODO: make this work
+  using MaskObjectType = itk::ImageMaskSpatialObject<Dimension>;
+  typename MaskObjectType::Pointer inputMask = MaskObjectType::New();
+  typename MaskObjectType::Pointer atlasMask = MaskObjectType::New();
+  inputMask->SetImage(inputBone1Label);
+  atlasMask->SetImage(atlasBone1Label);
+  metric2->SetFixedImageMask(inputMask.GetPointer());
+  metric2->SetMovingImageMask(atlasMask.GetPointer());
+
   using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
   typename InterpolatorType::Pointer interpolator2 = InterpolatorType::New();
   using RegistrationType = itk::ImageRegistrationMethod<ImageType, ImageType>;
