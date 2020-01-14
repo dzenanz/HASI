@@ -166,14 +166,24 @@ ClipBone1ByWholeLabel(typename ImageType::Pointer bone1, itk::Image<unsigned cha
   using LabelImageType = itk::Image<unsigned char, 3>;
   itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
 
+  typename ImageType::RegionType inputRegion = bone1->GetBufferedRegion();
+  typename ImageType::IndexType  index = inputRegion.GetIndex();
+  typename ImageType::PointType  p;
+  bone1->TransformIndexToPhysicalPoint(index, p);
+  bone1whole->TransformPhysicalPointToIndex(p, index);
+  itk::Offset<3> indexAdjustment = bone1whole->GetBufferedRegion().GetIndex() - index;
+
   mt->ParallelizeImageRegion<3>(
-    bone1->GetBufferedRegion(),
-    [bone1, bone1whole](const typename ImageType::RegionType region) {
-      itk::ImageRegionConstIterator<LabelImageType> iIt(bone1whole, region);
+    inputRegion,
+    [bone1, bone1whole, indexAdjustment](const typename ImageType::RegionType region) {
+      // bone1 is a subset of label image, so this should not go out of bounds
+      typename ImageType::RegionType labelRegion = region;
+      labelRegion.SetIndex(labelRegion.GetIndex() + indexAdjustment);
+
+      itk::ImageRegionConstIterator<LabelImageType> iIt(bone1whole, labelRegion);
       itk::ImageRegionIterator<ImageType>           oIt(bone1, region);
       for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
       {
-        auto label = iIt.Get();
         if (!iIt.Get())
         {
           oIt.Set(-4096);
@@ -272,11 +282,11 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   ClipBone1ByWholeLabel<ImageType>(inputBone1, inputBone1Label);
   ClipBone1ByWholeLabel<ImageType>(atlasBone1, atlasBone1Label);
-  WriteImage(inputBone1, outputBase + "-bone1.nrrd", false); // debug
-  WriteImage(atlasBone1, outputBase + "-bone1.nrrd", false); // debug
-  inputBone1Label = nullptr; // deallocate it
-  atlasBone1Label = nullptr; // deallocate it
-  inputLabels = nullptr;     // deallocate this too, as we want to make a better version of this
+  WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false); // debug
+  WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false); // debug
+  inputBone1Label = nullptr;                                  // deallocate it
+  atlasBone1Label = nullptr;                                  // deallocate it
+  inputLabels = nullptr; // deallocate this too, as we want to make a better version of this
 
 
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
