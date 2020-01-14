@@ -159,6 +159,30 @@ Bone1DistanceField(typename LabelImageType::Pointer    allLabels,
   return distF->GetOutput();
 }
 
+template <typename ImageType>
+void
+ClipBone1ByWholeLabel(typename ImageType::Pointer bone1, itk::Image<unsigned char, 3>::Pointer bone1whole)
+{
+  using LabelImageType = itk::Image<unsigned char, 3>;
+  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+
+  mt->ParallelizeImageRegion<3>(
+    bone1->GetBufferedRegion(),
+    [bone1, bone1whole](const typename ImageType::RegionType region) {
+      itk::ImageRegionConstIterator<LabelImageType> iIt(bone1whole, region);
+      itk::ImageRegionIterator<ImageType>           oIt(bone1, region);
+      for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
+      {
+        auto label = iIt.Get();
+        if (!iIt.Get())
+        {
+          oIt.Set(-4096);
+        }
+      }
+    },
+    nullptr);
+}
+
 class CommandIterationUpdate : public itk::Command
 {
 public:
@@ -245,6 +269,14 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
     Bone1DistanceField<LabelImageType>(inputLabels, inputBone1->GetBufferedRegion(), inputBone1Label);
   typename RealImageType::Pointer atlasDF1 =
     Bone1DistanceField<LabelImageType>(atlasLabels, atlasBone1->GetBufferedRegion(), atlasBone1Label);
+
+  ClipBone1ByWholeLabel<ImageType>(inputBone1, inputBone1Label);
+  ClipBone1ByWholeLabel<ImageType>(atlasBone1, atlasBone1Label);
+  WriteImage(inputBone1, outputBase + "-bone1.nrrd", false); // debug
+  WriteImage(atlasBone1, outputBase + "-bone1.nrrd", false); // debug
+  inputBone1Label = nullptr; // deallocate it
+  atlasBone1Label = nullptr; // deallocate it
+  inputLabels = nullptr;     // deallocate this too, as we want to make a better version of this
 
 
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
@@ -366,6 +398,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   affineTransform->SetParameters(registration1->GetLastTransformParameters());
   WriteTransform(affineTransform, outputBase + "-affine.tfm");
 
+  inputDF1 = nullptr; // deallocate it
+  atlasDF1 = nullptr; // deallocate it
 
   //  Perform Deformable Registration
   using CompositeTransformType = itk::CompositeTransform<>;
@@ -410,13 +444,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using MetricType = itk::MeanSquaresImageToImageMetric<ImageType, ImageType>;
   typename MetricType::Pointer metric2 = MetricType::New();
   metric2->ReinitializeSeed(76926294);
-  using MaskObjectType = itk::ImageMaskSpatialObject<Dimension>;
-  typename MaskObjectType::Pointer inputMask = MaskObjectType::New();
-  typename MaskObjectType::Pointer atlasMask = MaskObjectType::New();
-  inputMask->SetImage(inputBone1Label);
-  atlasMask->SetImage(atlasBone1Label);
-  metric2->SetFixedImageMask(inputMask.GetPointer());
-  //metric2->SetMovingImageMask(atlasMask.GetPointer());
 
   using InterpolatorType = itk::LinearInterpolateImageFunction<ImageType, double>;
   typename InterpolatorType::Pointer interpolator2 = InterpolatorType::New();
