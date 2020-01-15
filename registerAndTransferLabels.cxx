@@ -199,18 +199,16 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
 
-  auto perBoneProcessing = [](typename ImageType::Pointer      bone1,
-                              typename LabelImageType::Pointer allLabels,
-                              typename LabelImageType::Pointer bone1whole,
-                              typename RealImageType::Pointer  distanceField) {
+  auto perBoneProcessing = [](typename ImageType::Pointer bone1, typename LabelImageType::Pointer allLabels) {
     // bone1 and label images might have different extents (bone1 will be a strict subset)
     typename LabelImageType::RegionType bone1Region = bone1->GetBufferedRegion();
     typename ImageType::IndexType       index = bone1Region.GetIndex();
     typename ImageType::PointType       p;
     bone1->TransformIndexToPhysicalPoint(index, p);
     allLabels->TransformPhysicalPointToIndex(p, index);
-    itk::Offset<3> indexAdjustment = index - bone1whole->GetBufferedRegion().GetIndex();
+    itk::Offset<3> indexAdjustment = index - allLabels->GetBufferedRegion().GetIndex();
 
+    typename LabelImageType::Pointer bone1whole = LabelImageType::New();
     bone1whole->CopyInformation(allLabels);
     bone1whole->SetRegions(bone1Region);
     bone1whole->Allocate(true);
@@ -244,39 +242,38 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
     distF->SetSquaredDistance(false);
     distF->SetInsideIsPositive(true);
     distF->Update();
-    distanceField = distF->GetOutput();
+    typename RealImageType::Pointer distanceField = distF->GetOutput();
+    distanceField->DisconnectPipeline();
+    bone1whole = nullptr; // deallocate it
 
-    // set bone image's intensities to -4k outside of the bone mask
     mt->ParallelizeImageRegion<3>(
       bone1Region,
-      [bone1, bone1whole](const typename ImageType::RegionType region) {
-        itk::ImageRegionConstIterator<LabelImageType> iIt(bone1whole, region);
-        itk::ImageRegionIterator<ImageType>           oIt(bone1, region);
+      [bone1, distanceField](const typename ImageType::RegionType region) {
+        itk::ImageRegionConstIterator<RealImageType> iIt(distanceField, region);
+        itk::ImageRegionIterator<ImageType>          oIt(bone1, region);
         for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
         {
-          if (!iIt.Get())
+          float dist = iIt.Get();
+          // set to -1k everything far (0.1mm) from the bone, as well as
+          // high-intensity (>0HU) pixels near the bone - these might be adjacent bones
+          if (dist < -0.1 || (dist < 0 && oIt.Get() > 1500))
           {
-            oIt.Set(-4096);
+            oIt.Set(-1024);
           }
         }
       },
       nullptr);
+
+    return distanceField;
   };
 
 
-  typename LabelImageType::Pointer inputBone1Label = LabelImageType::New();
-  typename LabelImageType::Pointer atlasBone1Label = LabelImageType::New();
-  typename RealImageType::Pointer  inputDF1 = RealImageType::New();
-  typename RealImageType::Pointer  atlasDF1 = RealImageType::New();
-
-  perBoneProcessing(inputBone1, inputLabels, inputBone1Label, inputDF1);
-  perBoneProcessing(atlasBone1, atlasLabels, atlasBone1Label, atlasDF1);
+  typename RealImageType::Pointer inputDF1 = perBoneProcessing(inputBone1, inputLabels);
+  typename RealImageType::Pointer atlasDF1 = perBoneProcessing(atlasBone1, atlasLabels);
   WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false); // debug
   WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false); // debug
 
-  inputBone1Label = nullptr; // deallocate it
-  atlasBone1Label = nullptr; // deallocate it
-  inputLabels = nullptr;     // deallocate this too, as we want to make a better version of this
+  inputLabels = nullptr; // deallocate it, as we want to make a better version of this
 
 
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
