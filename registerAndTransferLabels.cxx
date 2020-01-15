@@ -199,79 +199,80 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
 
 
-  auto perBoneProcessing = [](typename ImageType::Pointer bone1, typename LabelImageType::Pointer allLabels) {
-    // bone1 and label images might have different extents (bone1 will be a strict subset)
-    typename LabelImageType::RegionType bone1Region = bone1->GetBufferedRegion();
-    typename ImageType::IndexType       index = bone1Region.GetIndex();
-    typename ImageType::PointType       p;
-    bone1->TransformIndexToPhysicalPoint(index, p);
-    allLabels->TransformPhysicalPointToIndex(p, index);
-    itk::Offset<3> indexAdjustment = index - allLabels->GetBufferedRegion().GetIndex();
+  auto perBoneProcessing =
+    [](typename ImageType::Pointer bone1, typename LabelImageType::Pointer allLabels, unsigned char howManyLabels) {
+      // bone1 and label images might have different extents (bone1 will be a strict subset)
+      typename LabelImageType::RegionType bone1Region = bone1->GetBufferedRegion();
+      typename ImageType::IndexType       index = bone1Region.GetIndex();
+      typename ImageType::PointType       p;
+      bone1->TransformIndexToPhysicalPoint(index, p);
+      allLabels->TransformPhysicalPointToIndex(p, index);
+      itk::Offset<3> indexAdjustment = index - allLabels->GetBufferedRegion().GetIndex();
 
-    typename LabelImageType::Pointer bone1whole = LabelImageType::New();
-    bone1whole->CopyInformation(allLabels);
-    bone1whole->SetRegions(bone1Region);
-    bone1whole->Allocate(true);
+      typename LabelImageType::Pointer bone1whole = LabelImageType::New();
+      bone1whole->CopyInformation(allLabels);
+      bone1whole->SetRegions(bone1Region);
+      bone1whole->Allocate(true);
 
-    // construct whole-bone1 segmentation by ignoring other bones and the split
-    // into corical and trabecular bone, and bone marrow (labels 1, 2 and 3)
-    itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
-    mt->ParallelizeImageRegion<LabelImageType::ImageDimension>(
-      bone1Region,
-      [bone1whole, allLabels, indexAdjustment](const typename LabelImageType::RegionType region) {
-        typename ImageType::RegionType labelRegion = region;
-        labelRegion.SetIndex(labelRegion.GetIndex() + indexAdjustment);
+      // construct whole-bone1 segmentation by ignoring other bones and the split
+      // into corical and trabecular bone, and bone marrow (labels 1, 2 and 3)
+      itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+      mt->ParallelizeImageRegion<LabelImageType::ImageDimension>(
+        bone1Region,
+        [bone1whole, allLabels, indexAdjustment, howManyLabels](const typename LabelImageType::RegionType region) {
+          typename ImageType::RegionType labelRegion = region;
+          labelRegion.SetIndex(labelRegion.GetIndex() + indexAdjustment);
 
-        itk::ImageRegionConstIterator<LabelImageType> iIt(allLabels, labelRegion);
-        itk::ImageRegionIterator<LabelImageType>      oIt(bone1whole, region);
-        for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
-        {
-          auto label = iIt.Get();
-          if (label >= 1 && label <= 3)
+          itk::ImageRegionConstIterator<LabelImageType> iIt(allLabels, labelRegion);
+          itk::ImageRegionIterator<LabelImageType>      oIt(bone1whole, region);
+          for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
           {
-            oIt.Set(1);
+            auto label = iIt.Get();
+            if (label >= 1 && label <= howManyLabels)
+            {
+              oIt.Set(1);
+            }
           }
-        }
-      },
-      nullptr);
+        },
+        nullptr);
 
-    using RealImageType = itk::Image<float, 3>;
-    using DistanceFieldType = itk::SignedMaurerDistanceMapImageFilter<LabelImageType, RealImageType>;
-    typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
-    distF->SetInput(bone1whole);
-    distF->SetSquaredDistance(false);
-    distF->SetInsideIsPositive(true);
-    distF->Update();
-    typename RealImageType::Pointer distanceField = distF->GetOutput();
-    distanceField->DisconnectPipeline();
-    bone1whole = nullptr; // deallocate it
+      using RealImageType = itk::Image<float, 3>;
+      using DistanceFieldType = itk::SignedMaurerDistanceMapImageFilter<LabelImageType, RealImageType>;
+      typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
+      distF->SetInput(bone1whole);
+      distF->SetSquaredDistance(false);
+      distF->SetInsideIsPositive(true);
+      distF->Update();
+      typename RealImageType::Pointer distanceField = distF->GetOutput();
+      distanceField->DisconnectPipeline();
+      bone1whole = nullptr; // deallocate it
 
-    mt->ParallelizeImageRegion<3>(
-      bone1Region,
-      [bone1, distanceField](const typename ImageType::RegionType region) {
-        itk::ImageRegionConstIterator<RealImageType> iIt(distanceField, region);
-        itk::ImageRegionIterator<ImageType>          oIt(bone1, region);
-        for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
-        {
-          float dist = iIt.Get();
-          // set pixels outside the bone to scaled distance to bone
-          // this should prevent trabecular texture from throwing registration off track
-          if (dist < 0)
+      mt->ParallelizeImageRegion<3>(
+        bone1Region,
+        [bone1, distanceField](const typename ImageType::RegionType region) {
+          itk::ImageRegionConstIterator<RealImageType> iIt(distanceField, region);
+          itk::ImageRegionIterator<ImageType>          oIt(bone1, region);
+          for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
           {
-            oIt.Set(dist * 1024);
+            float dist = iIt.Get();
+            // set pixels outside the bone to scaled distance to bone
+            // this should prevent trabecular texture from throwing registration off track
+            if (dist < 0)
+            {
+              oIt.Set(dist * 1024);
+            }
           }
-        }
-      },
-      nullptr);
+        },
+        nullptr);
 
-    return distanceField;
-  };
+      return distanceField;
+    };
 
 
-  typename RealImageType::Pointer inputDF1 = perBoneProcessing(inputBone1, inputLabels);
-  WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false); // debug
-  typename RealImageType::Pointer atlasDF1 = perBoneProcessing(atlasBone1, atlasLabels);
-  WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false); // debug
+  typename RealImageType::Pointer inputDF1 = perBoneProcessing(inputBone1, inputLabels, 3); // just the first bone
+  WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false);
+  typename RealImageType::Pointer atlasDF1 = perBoneProcessing(atlasBone1, atlasLabels, 255); // keep all atlas labels!
+  WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false);
 
   inputLabels = nullptr; // deallocate it, as we want to make a better version of this
 
@@ -334,7 +335,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
   metric1->SetNumberOfSpatialSamples(100000L);
-  //metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
+  // metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
 
   // Create the Command observer and register it with the optimizer.
   CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
