@@ -458,7 +458,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   optimizer->SetMaximumStepLength(10.0);
   optimizer->SetMinimumStepLength(0.01);
   optimizer->SetRelaxationFactor(0.7);
-  optimizer->SetNumberOfIterations(50);
+  optimizer->SetNumberOfIterations(20);
 
   // The BSpline transform has a large number of parameters, we use therefore a
   // much larger number of samples to run this stage.
@@ -478,7 +478,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
 
   DeformableTransformType::Pointer bsplineTransformFine = DeformableTransformType::New();
-  unsigned int                     numberOfGridNodesInOneDimensionFine = 20;
+  unsigned int                     numberOfGridNodesInOneDimensionFine = 7;
   meshSize.Fill(numberOfGridNodesInOneDimensionFine - SplineOrder);
 
   bsplineTransformFine->SetTransformDomainOrigin(fixedOrigin);
@@ -538,6 +538,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   optimizerScales = OptimizerScalesType(numberOfBSplineParameters);
   optimizerScales.Fill(1.0);
   optimizer->SetScales(optimizerScales);
+  optimizer->SetNumberOfIterations(10);
   bsplineTransformFine->SetParameters(parametersHigh);
 
   compositeTransform->RemoveTransform(); // remove bsplineTransformCoarse
