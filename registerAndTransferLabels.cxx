@@ -171,20 +171,24 @@ ClipBone1ByWholeLabel(typename ImageType::Pointer bone1, itk::Image<unsigned cha
   typename ImageType::PointType  p;
   bone1->TransformIndexToPhysicalPoint(index, p);
   bone1whole->TransformPhysicalPointToIndex(p, index);
-  itk::Offset<3> indexAdjustment = bone1whole->GetBufferedRegion().GetIndex() - index;
+  itk::Offset<3> indexAdjustment = index - bone1whole->GetBufferedRegion().GetIndex();
 
   mt->ParallelizeImageRegion<3>(
-    inputRegion,
+    bone1->GetBufferedRegion(),
     [bone1, bone1whole, indexAdjustment](const typename ImageType::RegionType region) {
-      // bone1 is a subset of label image, so this should not go out of bounds
       typename ImageType::RegionType labelRegion = region;
       labelRegion.SetIndex(labelRegion.GetIndex() + indexAdjustment);
+      typename ImageType::RegionType labelRegionCrop = labelRegion;
+      if (!labelRegionCrop.Crop(bone1whole->GetBufferedRegion()))
+      {
+        labelRegionCrop.SetSize(itk::Size<3>::Filled(0));
+      }
 
-      itk::ImageRegionConstIterator<LabelImageType> iIt(bone1whole, labelRegion);
-      itk::ImageRegionIterator<ImageType>           oIt(bone1, region);
+      itk::ImageRegionConstIteratorWithIndex<LabelImageType> iIt(bone1whole, labelRegion);
+      itk::ImageRegionIterator<ImageType>                    oIt(bone1, region);
       for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
       {
-        if (!iIt.Get())
+        if (!labelRegionCrop.IsInside(iIt.GetIndex()) || !iIt.Get())
         {
           oIt.Set(-4096);
         }
@@ -284,9 +288,10 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   ClipBone1ByWholeLabel<ImageType>(atlasBone1, atlasBone1Label);
   WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false); // debug
   WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false); // debug
-  inputBone1Label = nullptr;                                  // deallocate it
-  atlasBone1Label = nullptr;                                  // deallocate it
-  inputLabels = nullptr; // deallocate this too, as we want to make a better version of this
+
+  inputBone1Label = nullptr; // deallocate it
+  atlasBone1Label = nullptr; // deallocate it
+  inputLabels = nullptr;     // deallocate this too, as we want to make a better version of this
 
 
   using AffineTransformType = itk::AffineTransform<double, Dimension>;
