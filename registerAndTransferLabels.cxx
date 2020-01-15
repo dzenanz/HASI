@@ -269,8 +269,8 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
 
   typename RealImageType::Pointer inputDF1 = perBoneProcessing(inputBone1, inputLabels);
-  typename RealImageType::Pointer atlasDF1 = perBoneProcessing(atlasBone1, atlasLabels);
   WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false); // debug
+  typename RealImageType::Pointer atlasDF1 = perBoneProcessing(atlasBone1, atlasLabels);
   WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false); // debug
 
   inputLabels = nullptr; // deallocate it, as we want to make a better version of this
