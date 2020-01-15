@@ -254,11 +254,11 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
         for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
         {
           float dist = iIt.Get();
-          // set to -1k everything far (0.1mm) from the bone, as well as
-          // high-intensity (>0HU) pixels near the bone - these might be adjacent bones
-          if (dist < -0.1 || (dist < 0 && oIt.Get() > 1500))
+          // set pixels outside the bone to scaled distance to bone
+          // this should prevent trabecular texture from throwing registration off track
+          if (dist < 0)
           {
-            oIt.Set(-1024);
+            oIt.Set(dist * 1024);
           }
         }
       },
