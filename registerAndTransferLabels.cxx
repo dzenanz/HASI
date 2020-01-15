@@ -334,7 +334,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
   metric1->SetNumberOfSpatialSamples(100000L);
-  metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
+  //metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
 
   // Create the Command observer and register it with the optimizer.
   CommandIterationUpdate::Pointer observer = CommandIterationUpdate::New();
