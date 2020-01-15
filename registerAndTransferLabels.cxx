@@ -118,85 +118,6 @@ readSlicerFiducials(std::string fileName)
   return points;
 }
 
-template <typename LabelImageType>
-itk::SmartPointer<itk::Image<float, 3>>
-Bone1DistanceField(typename LabelImageType::Pointer    allLabels,
-                   typename LabelImageType::RegionType bone1Region,
-                   typename LabelImageType::Pointer    bone1whole)
-{
-  if (bone1whole.IsNull())
-  {
-    bone1whole = LabelImageType::New();
-  }
-  bone1whole->CopyInformation(allLabels);
-  bone1whole->SetRegions(bone1Region);
-  bone1whole->Allocate(true);
-
-  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
-  mt->ParallelizeImageRegion<LabelImageType::ImageDimension>(
-    bone1Region,
-    [bone1whole, allLabels](const typename LabelImageType::RegionType region) {
-      itk::ImageRegionConstIterator<LabelImageType> iIt(allLabels, region);
-      itk::ImageRegionIterator<LabelImageType>      oIt(bone1whole, region);
-      for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
-      {
-        auto label = iIt.Get();
-        if (label >= 1 && label <= 3)
-        {
-          oIt.Set(1);
-        }
-      }
-    },
-    nullptr);
-
-  using RealImageType = itk::Image<float, 3>;
-  using DistanceFieldType = itk::SignedMaurerDistanceMapImageFilter<LabelImageType, RealImageType>;
-  typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
-  distF->SetInput(bone1whole);
-  distF->SetSquaredDistance(false);
-  distF->SetInsideIsPositive(true);
-  distF->Update();
-  return distF->GetOutput();
-}
-
-template <typename ImageType>
-void
-ClipBone1ByWholeLabel(typename ImageType::Pointer bone1, itk::Image<unsigned char, 3>::Pointer bone1whole)
-{
-  using LabelImageType = itk::Image<unsigned char, 3>;
-  itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
-
-  typename ImageType::RegionType inputRegion = bone1->GetBufferedRegion();
-  typename ImageType::IndexType  index = inputRegion.GetIndex();
-  typename ImageType::PointType  p;
-  bone1->TransformIndexToPhysicalPoint(index, p);
-  bone1whole->TransformPhysicalPointToIndex(p, index);
-  itk::Offset<3> indexAdjustment = index - bone1whole->GetBufferedRegion().GetIndex();
-
-  mt->ParallelizeImageRegion<3>(
-    bone1->GetBufferedRegion(),
-    [bone1, bone1whole, indexAdjustment](const typename ImageType::RegionType region) {
-      typename ImageType::RegionType labelRegion = region;
-      labelRegion.SetIndex(labelRegion.GetIndex() + indexAdjustment);
-      typename ImageType::RegionType labelRegionCrop = labelRegion;
-      if (!labelRegionCrop.Crop(bone1whole->GetBufferedRegion()))
-      {
-        labelRegionCrop.SetSize(itk::Size<3>::Filled(0));
-      }
-
-      itk::ImageRegionConstIteratorWithIndex<LabelImageType> iIt(bone1whole, labelRegion);
-      itk::ImageRegionIterator<ImageType>                    oIt(bone1, region);
-      for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
-      {
-        if (!labelRegionCrop.IsInside(iIt.GetIndex()) || !iIt.Get())
-        {
-          oIt.Set(-4096);
-        }
-      }
-    },
-    nullptr);
-}
-
 class CommandIterationUpdate : public itk::Command
 {
 public:
@@ -276,16 +197,80 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   typename LabelImageType::Pointer inputLabels = ReadImage<LabelImageType>(inputBase + "-label.nrrd");
   typename LabelImageType::Pointer atlasLabels = ReadImage<LabelImageType>(atlasBase + "-label.nrrd");
+
+
+  auto perBoneProcessing = [](typename ImageType::Pointer      bone1,
+                              typename LabelImageType::Pointer allLabels,
+                              typename LabelImageType::Pointer bone1whole,
+                              typename RealImageType::Pointer  distanceField) {
+    // bone1 and label images might have different extents (bone1 will be a strict subset)
+    typename LabelImageType::RegionType bone1Region = bone1->GetBufferedRegion();
+    typename ImageType::IndexType       index = bone1Region.GetIndex();
+    typename ImageType::PointType       p;
+    bone1->TransformIndexToPhysicalPoint(index, p);
+    allLabels->TransformPhysicalPointToIndex(p, index);
+    itk::Offset<3> indexAdjustment = index - bone1whole->GetBufferedRegion().GetIndex();
+
+    bone1whole->CopyInformation(allLabels);
+    bone1whole->SetRegions(bone1Region);
+    bone1whole->Allocate(true);
+
+    // construct whole-bone1 segmentation by ignoring other bones and the split
+    // into corical and trabecular bone, and bone marrow (labels 1, 2 and 3)
+    itk::MultiThreaderBase::Pointer mt = itk::MultiThreaderBase::New();
+    mt->ParallelizeImageRegion<LabelImageType::ImageDimension>(
+      bone1Region,
+      [bone1whole, allLabels, indexAdjustment](const typename LabelImageType::RegionType region) {
+        typename ImageType::RegionType labelRegion = region;
+        labelRegion.SetIndex(labelRegion.GetIndex() + indexAdjustment);
+
+        itk::ImageRegionConstIterator<LabelImageType> iIt(allLabels, labelRegion);
+        itk::ImageRegionIterator<LabelImageType>      oIt(bone1whole, region);
+        for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
+        {
+          auto label = iIt.Get();
+          if (label >= 1 && label <= 3)
+          {
+            oIt.Set(1);
+          }
+        }
+      },
+      nullptr);
+
+    using RealImageType = itk::Image<float, 3>;
+    using DistanceFieldType = itk::SignedMaurerDistanceMapImageFilter<LabelImageType, RealImageType>;
+    typename DistanceFieldType::Pointer distF = DistanceFieldType::New();
+    distF->SetInput(bone1whole);
+    distF->SetSquaredDistance(false);
+    distF->SetInsideIsPositive(true);
+    distF->Update();
+    distanceField = distF->GetOutput();
+
+    // set bone image's intensities to -4k outside of the bone mask
+    mt->ParallelizeImageRegion<3>(
+      bone1Region,
+      [bone1, bone1whole](const typename ImageType::RegionType region) {
+        itk::ImageRegionConstIterator<LabelImageType> iIt(bone1whole, region);
+        itk::ImageRegionIterator<ImageType>           oIt(bone1, region);
+        for (; !oIt.IsAtEnd(); ++iIt, ++oIt)
+        {
+          if (!iIt.Get())
+          {
+            oIt.Set(-4096);
+          }
+        }
+      },
+      nullptr);
+  };
+
+
   typename LabelImageType::Pointer inputBone1Label = LabelImageType::New();
   typename LabelImageType::Pointer atlasBone1Label = LabelImageType::New();
+  typename RealImageType::Pointer  inputDF1 = RealImageType::New();
+  typename RealImageType::Pointer  atlasDF1 = RealImageType::New();
 
-  typename RealImageType::Pointer inputDF1 =
-    Bone1DistanceField<LabelImageType>(inputLabels, inputBone1->GetBufferedRegion(), inputBone1Label);
-  typename RealImageType::Pointer atlasDF1 =
-    Bone1DistanceField<LabelImageType>(atlasLabels, atlasBone1->GetBufferedRegion(), atlasBone1Label);
-
-  ClipBone1ByWholeLabel<ImageType>(inputBone1, inputBone1Label);
-  ClipBone1ByWholeLabel<ImageType>(atlasBone1, atlasBone1Label);
+  perBoneProcessing(inputBone1, inputLabels, inputBone1Label, inputDF1);
+  perBoneProcessing(atlasBone1, atlasLabels, atlasBone1Label, atlasDF1);
   WriteImage(inputBone1, outputBase + "-bone1i.nrrd", false); // debug
   WriteImage(atlasBone1, outputBase + "-bone1a.nrrd", false); // debug
 
