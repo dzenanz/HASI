@@ -333,7 +333,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // Regulating the number of samples in the Metric is equivalent to performing
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
-  metric1->SetNumberOfSpatialSamples(10000L);
+  metric1->SetNumberOfSpatialSamples(100000L);
   metric1->SetUseFixedImageSamplesIntensityThreshold(-1000);
 
   // Create the Command observer and register it with the optimizer.
@@ -385,7 +385,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // Regulating the number of samples in the Metric is equivalent to performing
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
-  metric1->SetNumberOfSpatialSamples(50000L);
+  metric1->SetNumberOfSpatialSamples(500000L);
 
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Affine Registration" << std::endl;
@@ -466,7 +466,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // Regulating the number of samples in the Metric is equivalent to performing
   // multi-resolution registration because it is indeed a sub-sampling of the
   // image.
-  metric2->SetNumberOfSpatialSamples(numberOfBSplineParameters * 100);
+  metric2->SetNumberOfSpatialSamples(numberOfBSplineParameters * 1000);
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Starting Deformable Registration Coarse Grid" << std::endl;
   registration2->Update();
@@ -547,8 +547,6 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   //  We now pass the parameters of the high resolution transform as the initial
   //  parameters to be used in a second stage of the registration process.
-  diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Starting Registration with high resolution transform" << std::endl;
   registration2->SetInitialTransformParameters(compositeTransform->GetParameters());
   registration2->SetTransform(compositeTransform);
 
@@ -566,6 +564,9 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   const auto         numberOfSamples = static_cast<unsigned long>(
     std::sqrt(static_cast<double>(numberOfBSplineParameters) * static_cast<double>(numberOfPixels)));
   metric2->SetNumberOfSpatialSamples(numberOfSamples);
+  std::cout << "Number of samples for fine BSpline registration: " << numberOfSamples << std::endl;
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " Starting Registration with high resolution transform" << std::endl;
   registration2->Update();
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Deformable Registration Fine Grid completed" << std::endl;
