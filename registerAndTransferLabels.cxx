@@ -363,7 +363,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   affineTransform->SetCenter(rigidTransform->GetCenter());
   affineTransform->SetTranslation(rigidTransform->GetTranslation());
   affineTransform->SetMatrix(rigidTransform->GetMatrix());
-  WriteTransform(affineTransform, outputBase + "-affineInit.tfm");
+  // WriteTransform(affineTransform, outputBase + "-affineInit.tfm"); // debug
 
   registration1->SetTransform(affineTransform);
   registration1->SetInitialTransformParameters(affineTransform->GetParameters());
@@ -477,111 +477,14 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   // image.
   metric2->SetNumberOfSpatialSamples(numberOfBSplineParameters * 1000);
   diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Starting Deformable Registration Coarse Grid" << std::endl;
+  std::cout << diff.count() << " Starting BSpline Deformable Registration" << std::endl;
   registration2->Update();
   diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Deformable Registration Coarse Grid completed" << std::endl;
+  std::cout << diff.count() << " BSpline Deformable Registration completed" << std::endl;
   OptimizerType::ParametersType finalParameters = registration2->GetLastTransformParameters();
   compositeTransform->SetParameters(finalParameters);
-  WriteTransform(compositeTransform, outputBase + "-AffineBSplineCoarse.tfm");
+  WriteTransform(compositeTransform, outputBase + "-BSpline.tfm");
 
-
-  DeformableTransformType::Pointer bsplineTransformFine = DeformableTransformType::New();
-  unsigned int                     numberOfGridNodesInOneDimensionFine = 7;
-  meshSize.Fill(numberOfGridNodesInOneDimensionFine - SplineOrder);
-
-  bsplineTransformFine->SetTransformDomainOrigin(fixedOrigin);
-  bsplineTransformFine->SetTransformDomainPhysicalDimensions(fixedPhysicalDimensions);
-  bsplineTransformFine->SetTransformDomainMeshSize(meshSize);
-  bsplineTransformFine->SetTransformDomainDirection(inputBone1->GetDirection());
-
-  numberOfBSplineParameters = bsplineTransformFine->GetNumberOfParameters();
-
-  ParametersType parametersHigh(numberOfBSplineParameters);
-  parametersHigh.Fill(0.0);
-
-  //  Now we need to initialize the BSpline coefficients of the higher resolution
-  //  transform. This is done by first computing the actual deformation field
-  //  at the higher resolution from the lower resolution BSpline coefficients.
-  //  Then a BSpline decomposition is done to obtain the BSpline coefficient of
-  //  the higher resolution transform.
-  std::cout << "Upsampling BSpline parameters to high-resolution grid" << std::endl;
-  unsigned int counter = 0;
-  for (unsigned int k = 0; k < Dimension; k++)
-  {
-    using ParametersImageType = DeformableTransformType::ImageType;
-    using ResamplerType = itk::ResampleImageFilter<ParametersImageType, ParametersImageType>;
-    ResamplerType::Pointer upsampler = ResamplerType::New();
-
-    using FunctionType = itk::BSplineResampleImageFunction<ParametersImageType, double>;
-    FunctionType::Pointer function = FunctionType::New();
-
-    upsampler->SetInput(bsplineTransformCoarse->GetCoefficientImages()[k]);
-    upsampler->SetInterpolator(function);
-    upsampler->SetTransform(identityTransform);
-    upsampler->SetSize(bsplineTransformFine->GetCoefficientImages()[k]->GetLargestPossibleRegion().GetSize());
-    upsampler->SetOutputSpacing(bsplineTransformFine->GetCoefficientImages()[k]->GetSpacing());
-    upsampler->SetOutputOrigin(bsplineTransformFine->GetCoefficientImages()[k]->GetOrigin());
-
-    using DecompositionType = itk::BSplineDecompositionImageFilter<ParametersImageType, ParametersImageType>;
-    DecompositionType::Pointer decomposition = DecompositionType::New();
-
-    decomposition->SetSplineOrder(SplineOrder);
-    decomposition->SetInput(upsampler->GetOutput());
-    decomposition->Update();
-
-    ParametersImageType::Pointer newCoefficients = decomposition->GetOutput();
-
-    // copy the coefficients into the parameter array
-    using Iterator = itk::ImageRegionIterator<ParametersImageType>;
-    Iterator it(newCoefficients, bsplineTransformFine->GetCoefficientImages()[k]->GetLargestPossibleRegion());
-    while (!it.IsAtEnd())
-    {
-      parametersHigh[counter++] = it.Get();
-      ++it;
-    }
-    diff = std::chrono::steady_clock::now() - startTime;
-    std::cout << diff.count() << " Dimension " << k << " complete" << std::endl;
-  }
-
-  optimizerScales = OptimizerScalesType(numberOfBSplineParameters);
-  optimizerScales.Fill(1.0);
-  optimizer->SetScales(optimizerScales);
-  optimizer->SetNumberOfIterations(10);
-  bsplineTransformFine->SetParameters(parametersHigh);
-
-  compositeTransform->RemoveTransform(); // remove bsplineTransformCoarse
-  compositeTransform->AddTransform(bsplineTransformFine);
-  compositeTransform->SetOnlyMostRecentTransformToOptimizeOn();
-
-  //  We now pass the parameters of the high resolution transform as the initial
-  //  parameters to be used in a second stage of the registration process.
-  registration2->SetInitialTransformParameters(compositeTransform->GetParameters());
-  registration2->SetTransform(compositeTransform);
-
-  // The BSpline transform at fine scale has a very large number of parameters,
-  // we use therefore a much larger number of samples to run this stage. In
-  // this case, however, the number of transform parameters is closer to the
-  // number of pixels in the image. Therefore we use the geometric mean of the
-  // two numbers to ensure that the number of samples is larger than the number
-  // of transform parameters and smaller than the number of samples.
-  //
-  // Regulating the number of samples in the Metric is equivalent to performing
-  // multi-resolution registration because it is indeed a sub-sampling of the
-  // image.
-  const unsigned int numberOfPixels = fixedRegion.GetNumberOfPixels();
-  const auto         numberOfSamples = static_cast<unsigned long>(
-    std::sqrt(static_cast<double>(numberOfBSplineParameters) * static_cast<double>(numberOfPixels)));
-  metric2->SetNumberOfSpatialSamples(numberOfSamples);
-  std::cout << "Number of samples for fine BSpline registration: " << numberOfSamples << std::endl;
-  diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Starting Registration with high resolution transform" << std::endl;
-  registration2->Update();
-  diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Deformable Registration Fine Grid completed" << std::endl;
-  finalParameters = registration2->GetLastTransformParameters();
-  compositeTransform->SetParameters(finalParameters);
-  WriteTransform(compositeTransform, outputBase + "-AffineBSplineFine.tfm");
 
   diff = std::chrono::steady_clock::now() - startTime;
   std::cout << diff.count() << " Resampling the atlas into the space of input image" << std::endl;
