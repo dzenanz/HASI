@@ -310,9 +310,16 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
 
   //  Define optimizer normalization to compensate for different dynamic range
   //  of rotations and translations.
+  double avgSpacing = 1.0;
+  for (unsigned d = 0; d < Dimension; d++)
+  {
+    avgSpacing *= inputBone1->GetSpacing()[d];
+  }
+  avgSpacing = std::pow(avgSpacing, 1 / 3.0); // geometric mean has equivalent voxel volume
+
   using OptimizerScalesType = OptimizerType::ScalesType;
   OptimizerScalesType optimizerScales(rigidTransform->GetNumberOfParameters());
-  const double        translationScale = 1.0 / 1000.0;
+  const double        translationScale = 1.0 / (1000.0 * avgSpacing);
 
   optimizerScales[0] = 1.0;
   optimizerScales[1] = 1.0;
