@@ -356,6 +356,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   affineTransform->SetCenter(rigidTransform->GetCenter());
   affineTransform->SetTranslation(rigidTransform->GetTranslation());
   affineTransform->SetMatrix(rigidTransform->GetMatrix());
+  WriteTransform(affineTransform, outputBase + "-affineInit.tfm");
 
   registration1->SetTransform(affineTransform);
   registration1->SetInitialTransformParameters(affineTransform->GetParameters());
