@@ -210,7 +210,7 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
       itk::Offset<3> indexAdjustment = index - allLabels->GetBufferedRegion().GetIndex();
 
       typename LabelImageType::Pointer bone1whole = LabelImageType::New();
-      bone1whole->CopyInformation(allLabels);
+      bone1whole->CopyInformation(bone1);
       bone1whole->SetRegions(bone1Region);
       bone1whole->Allocate(true);
 
