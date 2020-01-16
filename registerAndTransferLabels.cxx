@@ -491,15 +491,22 @@ mainProcessing(std::string inputBase, std::string outputBase, std::string atlasB
   using ResampleFilterType = itk::ResampleImageFilter<LabelImageType, LabelImageType, double>;
   ResampleFilterType::Pointer resampleFilter = ResampleFilterType::New();
   resampleFilter->SetInput(atlasLabels);
-  resampleFilter->SetTransform(compositeTransform);
+  resampleFilter->SetTransform(affineTransform);
   resampleFilter->SetReferenceImage(inputBone1);
   resampleFilter->SetUseReferenceImage(true);
   resampleFilter->SetDefaultPixelValue(0);
   resampleFilter->Update();
   diff = std::chrono::steady_clock::now() - startTime;
-  std::cout << diff.count() << " Resampling complete!" << std::endl;
+  std::cout << diff.count() << " Affine Resampling complete!" << std::endl;
   typename LabelImageType::Pointer segmentedImage = resampleFilter->GetOutput();
   WriteImage(segmentedImage, outputBase + "-A-label.nrrd", true);
+
+  resampleFilter->SetTransform(compositeTransform);
+  resampleFilter->Update();
+  diff = std::chrono::steady_clock::now() - startTime;
+  std::cout << diff.count() << " BSpline Resampling complete!" << std::endl;
+  segmentedImage = resampleFilter->GetOutput();
+  WriteImage(segmentedImage, outputBase + "-BS-label.nrrd", true);
 }
 
 int
