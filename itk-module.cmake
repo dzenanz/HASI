@@ -16,6 +16,7 @@ itk_module(HASI
     ITKRegistrationCommon
     ITKSpatialObjects
     BoneEnhancement
+    Elastix
     # debugging
     ITKIOTransformHDF5
     ITKIOTransformInsightLegacy
