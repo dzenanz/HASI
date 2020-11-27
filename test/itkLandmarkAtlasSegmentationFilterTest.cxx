@@ -201,6 +201,7 @@ itkLandmarkAtlasSegmentationFilterTest(int argc, char * argv[])
   filter->SetAtlasLabels(atlasLabels);
   filter->SetInputLandmarks(inputLandmarks);
   filter->SetAtlasLandmarks(atlasLandmarks);
+  filter->SetDebug(true);
 
   ITK_TRY_EXPECT_NO_EXCEPTION(filter->Update());
   ITK_TRY_EXPECT_NO_EXCEPTION(WriteTransform(filter->GetLandmarksTransform(), outputBase + "LandmarksTransform.h5"));
