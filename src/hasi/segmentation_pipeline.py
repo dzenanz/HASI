@@ -64,10 +64,12 @@ def read_slicer_fiducials(filename):
     return fiducials
 
 
+rigid_transform_type = itk.VersorRigid3DTransform[itk.D]
+
 def register_landmarks(atlas_landmarks, input_landmarks):
     transform_type = itk.Transform[itk.D, 3, 3]
     landmark_transformer = itk.LandmarkBasedTransformInitializer[transform_type].New()
-    rigid_transform = itk.VersorRigid3DTransform[itk.D].New()
+    rigid_transform = rigid_transform_type.New()
     landmark_transformer.SetFixedLandmarks(atlas_landmarks)
     landmark_transformer.SetMovingLandmarks(input_landmarks)
     landmark_transformer.SetTransform(rigid_transform)
@@ -103,19 +105,22 @@ def main_processing(root_dir, bone, atlas):
 
     pose = read_slicer_fiducials(root_dir + bone + '/Pose.fcsv')
 
-    transforms = []
+    # now load atlas landmarks, axis-aligning transform, image, and segmentation
+    atlas_landmarks = read_slicer_fiducials(root_dir + bone + '/' + atlas + '.fcsv')
+    atlas_aa_transform = itk.transformread(root_dir + bone + '/' + atlas + '-landmarks.tfm')
+    atlas_aa_transform = atlas_aa_transform[0]  # turn this from a list into a transform
+    atlas_aa_inverse_transform = rigid_transform_type.New()
+    atlas_aa_transform.GetInverse(atlas_aa_inverse_transform)
+    atlas_aa_landmarks = [atlas_aa_inverse_transform.TransformPoint(l) for l in atlas_landmarks]
+
+    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA.nrrd')
+    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA.seg.nrrd',
+                                       pixel_type=itk.VariableLengthVector[itk.UC])
+
+    # now go through all the cases, doing main processing
     for case in data_list:
         case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
         transform = register_landmarks(pose, case_landmarks)
-        # itk.transformwrite([transform], root_dir + bone + '/' + case + '-landmarks.tfm')  # debug
-        transforms.append(transform)
-
-    # now load atlas landmarks, axis-aligning transform, image, and segmentation
-    atlas_landmarks = read_slicer_fiducials(root_dir + bone + '/' + atlas + '.fcsv')
-    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA.nrrd')
-    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA.seg.nrrd')
-    atlas_aa_transform = itk.transformread(root_dir + bone + '/' + atlas + '-landmarks.tfm')
-    atlas_aa_transform = atlas_aa_transform[0]  # turn this from a list into a transform
 
 
 # main code
