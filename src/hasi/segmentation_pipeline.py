@@ -120,8 +120,52 @@ def main_processing(root_dir, bone, atlas):
     # now go through all the cases, doing main processing
     for case in data_list:
         case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
-        transform = register_landmarks(pose, case_landmarks)
+        case_transform = register_landmarks(pose, case_landmarks)
+        composite_transform = rigid_transform_type.New()
+        composite_transform.SetParameters(case_transform.GetParameters())  # deep copy
+        composite_transform.Compose(atlas_aa_inverse_transform, True)  # pre-compose
+        print(composite_transform)
+        case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd')
 
+        # Construct elastix parameter map
+        parameter_object = itk.ParameterObject.New()
+        resolutions = 4
+        parameter_map_rigid = parameter_object.GetDefaultParameterMap('rigid', resolutions)
+        parameter_object.AddParameterMap(parameter_map_rigid)
+        parameter_map_bspline = parameter_object.GetDefaultParameterMap("bspline", resolutions, 1.0)
+        parameter_object.AddParameterMap(parameter_map_bspline)
+        parameter_object.SetParameter("DefaultPixelValue", "-1024")
+
+        # how to add case_transform as the initial rigid transform?
+        # Inverse operations in @prerakmody's script?
+        # https://gist.github.com/prerakmody/9bcd8b055ea3ea32b7cc0fc669e82900#file-convert_elastix_to_itk_transform-py
+
+        registered, transform = itk.elastix_registration_method(case_image, atlas_aa_image,
+                                                                parameter_object=parameter_object)
+
+        final_composite_rigid_and_bspline_transform = ...  # is there anything newer/better than @prerakmody's script?
+        itk.tranformwrite(final_composite_rigid_and_bspline_transform, 'case-reg.tfm')  # save it to disk in ITK format
+
+        # now use the tranform to transfer atlast labels to the case under observation
+        nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
+        atlas_labels_transformed = itk.resample_image_filter(atlas_aa_segmentation,
+                                                             use_reference_image=True,
+                                                             reference_image=case_image,
+                                                             transform=final_composite_rigid_and_bspline_transform,
+                                                             interpolator=nearest_interpolator)
+        itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
+
+        # continue processing
+        roi = 0  # construct from atlas_labels_transformed by choosing only some labels
+        morphometry_filter = itk.BoneMorphometryFeaturesFilter.New(case_image)
+        morphometry_filter.SetMaskImage(roi)
+        morphometry_filter.Update()
+
+        print('BVTV', morphometry_filter.GetBVTV())
+        print('TbN', morphometry_filter.GetTbN())
+        print('TbTh', morphometry_filter.GetTbTh())
+        print('TbSp', morphometry_filter.GetTbSp())
+        print('BSBV', morphometry_filter.GetBSBV())
 
 # main code
 main_processing('../../', 'Tibia', '901-R')
