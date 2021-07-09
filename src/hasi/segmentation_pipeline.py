@@ -156,18 +156,17 @@ def main_processing(root_dir, bone, atlas):
         #                                                      transform=final_composite_rigid_and_bspline_transform,
         #                                                      interpolator=nearest_interpolator)
         # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
-        #
-        # # continue processing
-        # roi = 0  # construct from atlas_labels_transformed by choosing only some labels
-        # morphometry_filter = itk.BoneMorphometryFeaturesFilter.New(case_image)
-        # morphometry_filter.SetMaskImage(roi)
-        # morphometry_filter.Update()
-        #
-        # print('BVTV', morphometry_filter.GetBVTV())
-        # print('TbN', morphometry_filter.GetTbN())
-        # print('TbTh', morphometry_filter.GetTbTh())
-        # print('TbSp', morphometry_filter.GetTbSp())
-        # print('BSBV', morphometry_filter.GetBSBV())
+
+        # compute morphometry features
+        # TODO: use case_image and atlas_labels_transformed
+        morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(atlas_aa_image)
+        morphometry_filter.SetMaskImage(atlas_aa_segmentation)
+        morphometry_filter.Update()
+        print('BVTV', morphometry_filter.GetBVTV())
+        print('TbN', morphometry_filter.GetTbN())
+        print('TbTh', morphometry_filter.GetTbTh())
+        print('TbSp', morphometry_filter.GetTbSp())
+        print('BSBV', morphometry_filter.GetBSBV())
 
         # now generate the mesh from the segmented case
         padded_segmentation = itk.constant_pad_image_filter(
@@ -180,11 +179,11 @@ def main_processing(root_dir, bone, atlas):
         mesh = itk.cuberille_image_to_mesh_filter(padded_segmentation)
         itk.meshwrite(mesh, root_dir + bone + '/' + case + '.vtk')
 
-        cannonical_pose_mesh = itk.transform_mesh_filter(
+        canonical_pose_mesh = itk.transform_mesh_filter(
             mesh,
             transform=case_transform
         )
-        itk.meshwrite(cannonical_pose_mesh, root_dir + bone + '/' + case + '.obj')
+        itk.meshwrite(canonical_pose_mesh, root_dir + bone + '/' + case + '.obj')
 
 
 # main code
