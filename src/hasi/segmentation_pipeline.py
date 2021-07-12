@@ -166,13 +166,14 @@ def main_processing(root_dir, bone, atlas):
                 parameter_map,
                 root_dir + bone + '/' + case + '-' + atlas + '.{0}.txt'.format(index))
 
+        elastix_transform.SetParameter('FinalBSplineInterpolationOrder', '0')
         result_image_transformix = itk.transformix_filter(
             atlas_aa_segmentation,
             elastix_transform,
             # reference image?
         )
-
         result_image = result_image_transformix.astype(itk.UC)
+        itk.imwrite(result_image, root_dir + bone + '/' + case + '-' + atlas + '-label.nrrd', compression=True)
 
         # # now use the transform to transfer atlas labels to the case under observation
         # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
@@ -182,7 +183,6 @@ def main_processing(root_dir, bone, atlas):
         #                                                      transform=elastix_transform,
         #                                                      interpolator=nearest_interpolator)
         # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
-        itk.imwrite(result_image, root_dir + bone + '/' + case + '-' + atlas + '-label.nrrd', compression=True)
 
         # compute morphometry features
         morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_image)
