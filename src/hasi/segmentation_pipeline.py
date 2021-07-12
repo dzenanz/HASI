@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Purpose: Python functions for shape classification and distance
-#           analysis with DWD classifier
+# Purpose: Overall segmentation pipeline
+
 import itk
 import numpy as np
 import os
@@ -107,60 +107,86 @@ def main_processing(root_dir, bone, atlas):
     pose = read_slicer_fiducials(root_dir + bone + '/Pose.fcsv')
 
     # now load atlas landmarks, axis-aligning transform, image, and segmentation
-    atlas_landmarks = read_slicer_fiducials(root_dir + bone + '/' + atlas + '.fcsv')
+    # atlas_landmarks = read_slicer_fiducials(root_dir + bone + '/' + atlas + '.fcsv')  # not needed
     atlas_aa_transform = itk.transformread(root_dir + bone + '/' + atlas + '-landmarks.tfm')
     atlas_aa_transform = atlas_aa_transform[0]  # turn this from a list into a transform
     atlas_aa_inverse_transform = rigid_transform_type.New()
     atlas_aa_transform.GetInverse(atlas_aa_inverse_transform)
-    atlas_aa_landmarks = [atlas_aa_inverse_transform.TransformPoint(l) for l in atlas_landmarks]
+    # atlas_aa_landmarks = pose
 
-    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA.nrrd')
+    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA.nrrd', pixel_type=itk.F)
     # atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA.seg.nrrd',
     #                                    pixel_type=itk.VariableLengthVector[itk.UC])
-    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd')
+    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd', pixel_type=itk.F)
 
     # now go through all the cases, doing main processing
     for case in data_list:
         case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
-        case_transform = register_landmarks(pose, case_landmarks)
-        composite_transform = rigid_transform_type.New()
-        composite_transform.SetParameters(case_transform.GetParameters())  # deep copy
-        composite_transform.Compose(atlas_aa_inverse_transform, True)  # pre-compose
-        print(composite_transform)
-        case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd')
+        case_to_pose = register_landmarks(pose, case_landmarks)
+        pose_to_case = rigid_transform_type.New()
+        case_to_pose.GetInverse(pose_to_case)
+        # atlas_to_case = register_landmarks(case_landmarks, atlas_landmarks)
+        case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd', pixel_type=itk.F)
 
-        # # Construct elastix parameter map
-        # parameter_object = itk.ParameterObject.New()
-        # resolutions = 4
-        # parameter_map_rigid = parameter_object.GetDefaultParameterMap('rigid', resolutions)
-        # parameter_object.AddParameterMap(parameter_map_rigid)
-        # parameter_map_bspline = parameter_object.GetDefaultParameterMap("bspline", resolutions, 1.0)
-        # parameter_object.AddParameterMap(parameter_map_bspline)
-        # parameter_object.SetParameter("DefaultPixelValue", "-1024")
-        #
-        # # how to add case_transform as the initial rigid transform?
-        # # Inverse operations in @prerakmody's script?
-        # # https://gist.github.com/prerakmody/9bcd8b055ea3ea32b7cc0fc669e82900#file-convert_elastix_to_itk_transform-py
-        #
-        # registered, transform = itk.elastix_registration_method(case_image, atlas_aa_image,
-        #                                                         parameter_object=parameter_object)
-        #
-        # final_composite_rigid_and_bspline_transform = ...  # is there anything newer/better than @prerakmody's script?
-        # itk.tranformwrite(final_composite_rigid_and_bspline_transform, 'case-reg.tfm')  # save it to disk in ITK format
-        #
-        # # now use the tranform to transfer atlast labels to the case under observation
+        # write atlas_to_case transform to file - needed for initializing Elastix registration
+        affine_pose_to_case = itk.AffineTransform[itk.D, 3].New()
+        affine_pose_to_case.SetCenter(pose_to_case.GetCenter())
+        affine_pose_to_case.SetMatrix(pose_to_case.GetMatrix())
+        affine_pose_to_case.SetOffset(pose_to_case.GetOffset())
+        print(pose_to_case)  # debug
+        print(affine_pose_to_case)  # debug
+        atlas_to_case_filename = root_dir + bone + '/' + case + '-' + atlas + '.tfm'
+        itk.transformwrite([affine_pose_to_case], atlas_to_case_filename)
+        out_elastix_transform = open(atlas_to_case_filename + '.txt', "w")
+        out_elastix_transform.writelines(['(Transform "File")\n',
+                                          '(TransformFileName "' + case + '-' + atlas + '.tfm")'])
+        out_elastix_transform.close()
+
+        # Construct elastix parameter map
+        parameter_object = itk.ParameterObject.New()
+        resolutions = 4
+        parameter_map_rigid = parameter_object.GetDefaultParameterMap('rigid', resolutions)
+        parameter_object.AddParameterMap(parameter_map_rigid)
+        parameter_map_bspline = parameter_object.GetDefaultParameterMap("bspline", resolutions, 1.0)
+        parameter_object.AddParameterMap(parameter_map_bspline)
+        parameter_object.SetParameter("DefaultPixelValue", "-1024")
+
+        registered, elastix_transform = itk.elastix_registration_method(
+            case_image, atlas_aa_image,
+            parameter_object=parameter_object,
+            initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
+            log_to_console=True,
+        )
+        itk.imwrite(registered.astype(itk.SS), root_dir + bone + '/' + case + '-' + atlas + '-reg.nrrd')
+        print(elastix_transform)
+        # serialize each parameter map to a file.
+        for index in range(elastix_transform.GetNumberOfParameterMaps()):
+            parameter_map = elastix_transform.GetParameterMap(index)
+            elastix_transform.WriteParameterFile(
+                parameter_map,
+                root_dir + bone + '/' + case + '-' + atlas + '.{0}.txt'.format(index))
+
+        result_image_transformix = itk.transformix_filter(
+            atlas_aa_segmentation,
+            elastix_transform,
+            # reference image?
+        )
+
+        result_image = result_image_transformix.astype(itk.UC)
+
+        # # now use the transform to transfer atlas labels to the case under observation
         # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
         # atlas_labels_transformed = itk.resample_image_filter(atlas_aa_segmentation,
         #                                                      use_reference_image=True,
         #                                                      reference_image=case_image,
-        #                                                      transform=final_composite_rigid_and_bspline_transform,
+        #                                                      transform=elastix_transform,
         #                                                      interpolator=nearest_interpolator)
         # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
+        itk.imwrite(result_image, root_dir + bone + '/' + case + '-' + atlas + '-label.nrrd', compression=True)
 
         # compute morphometry features
-        # TODO: use case_image and atlas_labels_transformed
-        morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(atlas_aa_image)
-        morphometry_filter.SetMaskImage(atlas_aa_segmentation)
+        morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_image)
+        morphometry_filter.SetMaskImage(result_image)
         morphometry_filter.Update()
         print('BVTV', morphometry_filter.GetBVTV())
         print('TbN', morphometry_filter.GetTbN())
@@ -170,7 +196,7 @@ def main_processing(root_dir, bone, atlas):
 
         # now generate the mesh from the segmented case
         padded_segmentation = itk.constant_pad_image_filter(
-            atlas_aa_segmentation,  # atlas_labels_transformed
+            result_image,
             PadUpperBound=1,
             PadLowerBound=1,
             Constant=0
@@ -181,7 +207,7 @@ def main_processing(root_dir, bone, atlas):
 
         canonical_pose_mesh = itk.transform_mesh_filter(
             mesh,
-            transform=case_transform
+            transform=pose_to_case
         )
         itk.meshwrite(canonical_pose_mesh, root_dir + bone + '/' + case + '.obj')
 
