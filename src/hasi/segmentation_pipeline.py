@@ -17,7 +17,6 @@
 # Purpose: Overall segmentation pipeline
 
 import itk
-import numpy as np
 import os
 from pathlib import Path
 
@@ -133,8 +132,6 @@ def main_processing(root_dir, bone, atlas):
         affine_pose_to_case.SetCenter(pose_to_case.GetCenter())
         affine_pose_to_case.SetMatrix(pose_to_case.GetMatrix())
         affine_pose_to_case.SetOffset(pose_to_case.GetOffset())
-        print(pose_to_case)  # debug
-        print(affine_pose_to_case)  # debug
         atlas_to_case_filename = root_dir + bone + '/' + case + '-' + atlas + '.tfm'
         itk.transformwrite([affine_pose_to_case], atlas_to_case_filename)
         out_elastix_transform = open(atlas_to_case_filename + '.txt', "w")
@@ -203,15 +200,16 @@ def main_processing(root_dir, bone, atlas):
         )
 
         mesh = itk.cuberille_image_to_mesh_filter(padded_segmentation)
-        itk.meshwrite(mesh, root_dir + bone + '/' + case + '.vtk')
+        itk.meshwrite(mesh, root_dir + bone + '/' + case + '-' + atlas + '.vtk')
 
         canonical_pose_mesh = itk.transform_mesh_filter(
             mesh,
             transform=pose_to_case
         )
-        itk.meshwrite(canonical_pose_mesh, root_dir + bone + '/' + case + '.obj')
+        itk.meshwrite(canonical_pose_mesh, root_dir + bone + '/' + case + '-' + atlas + '.obj')
 
 
 # main code
 main_processing('../../', 'Tibia', '901-R')
+main_processing('../../', 'Tibia', '901-L')
 main_processing('../../', 'Femur', '907-L')
