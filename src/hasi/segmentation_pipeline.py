@@ -102,6 +102,7 @@ def main_processing(root_dir, bone, atlas):
         print('There is a discrepancy between data_list and landmarks_list')
         print('data_list:', data_list)
         print('landmarks_list:', landmarks_list)
+    print(f'List of cases to process: {data_list}')
 
     pose = read_slicer_fiducials(root_dir + bone + '/Pose.fcsv')
 
@@ -120,6 +121,7 @@ def main_processing(root_dir, bone, atlas):
 
     # now go through all the cases, doing main processing
     for case in data_list:
+        print(f'Processing case {case}')
         case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
         case_to_pose = register_landmarks(pose, case_landmarks)
         pose_to_case = rigid_transform_type.New()
@@ -148,13 +150,16 @@ def main_processing(root_dir, bone, atlas):
         parameter_object.AddParameterMap(parameter_map_bspline)
         parameter_object.SetParameter("DefaultPixelValue", "-1024")
 
+        print('Starting atlas registration')
         registered, elastix_transform = itk.elastix_registration_method(
             case_image, atlas_aa_image,
             parameter_object=parameter_object,
             initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
             log_to_console=True,
         )
-        itk.imwrite(registered.astype(itk.SS), root_dir + bone + '/' + case + '-' + atlas + '-reg.nrrd')
+        registered_filename = root_dir + bone + '/' + case + '-' + atlas + '-reg.nrrd'
+        print(f'Writing registered image to file {registered_filename}')
+        itk.imwrite(registered.astype(itk.SS), registered_filename)
         print(elastix_transform)
         # serialize each parameter map to a file.
         for index in range(elastix_transform.GetNumberOfParameterMaps()):
@@ -163,6 +168,7 @@ def main_processing(root_dir, bone, atlas):
                 parameter_map,
                 root_dir + bone + '/' + case + '-' + atlas + '.{0}.txt'.format(index))
 
+        print('Running transformix')
         elastix_transform.SetParameter('FinalBSplineInterpolationOrder', '0')
         result_image_transformix = itk.transformix_filter(
             atlas_aa_segmentation,
@@ -170,7 +176,9 @@ def main_processing(root_dir, bone, atlas):
             # reference image?
         )
         result_image = result_image_transformix.astype(itk.UC)
-        itk.imwrite(result_image, root_dir + bone + '/' + case + '-' + atlas + '-label.nrrd', compression=True)
+        registered_label_file = root_dir + bone + '/' + case + '-' + atlas + '-label.nrrd'
+        print(f'Writing deformed atlas to {registered_label_file}')
+        itk.imwrite(result_image, registered_label_file, compression=True)
 
         # # now use the transform to transfer atlas labels to the case under observation
         # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
@@ -181,7 +189,7 @@ def main_processing(root_dir, bone, atlas):
         #                                                      interpolator=nearest_interpolator)
         # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
 
-        # compute morphometry features
+        print('Computing morphometry features')
         morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_image)
         morphometry_filter.SetMaskImage(result_image)
         morphometry_filter.Update()
@@ -191,7 +199,7 @@ def main_processing(root_dir, bone, atlas):
         print('TbSp', morphometry_filter.GetTbSp())
         print('BSBV', morphometry_filter.GetBSBV())
 
-        # now generate the mesh from the segmented case
+        print('Generate the mesh from the segmented case')
         padded_segmentation = itk.constant_pad_image_filter(
             result_image,
             PadUpperBound=1,
@@ -200,13 +208,18 @@ def main_processing(root_dir, bone, atlas):
         )
 
         mesh = itk.cuberille_image_to_mesh_filter(padded_segmentation)
-        itk.meshwrite(mesh, root_dir + bone + '/' + case + '-' + atlas + '.vtk')
+        mesh_filename = root_dir + bone + '/' + case + '-' + atlas + '.vtk'
+        print(f'Writing the mesh to file {mesh_filename}')
+        itk.meshwrite(mesh, mesh_filename)
 
         canonical_pose_mesh = itk.transform_mesh_filter(
             mesh,
             transform=pose_to_case
         )
-        itk.meshwrite(canonical_pose_mesh, root_dir + bone + '/' + case + '-' + atlas + '.obj')
+        canonical_pose_filename = root_dir + bone + '/' + case + '-' + atlas + '.obj'
+        print(f'Writing canonical pose mesh to {canonical_pose_filename}')
+        itk.meshwrite(canonical_pose_mesh, canonical_pose_filename)
+        print(f'Done processing case {case}')
 
 
 # main code
