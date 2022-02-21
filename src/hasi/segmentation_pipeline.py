@@ -119,9 +119,38 @@ def main_processing(root_dir, bone, atlas):
     #                                    pixel_type=itk.VariableLengthVector[itk.UC])
     atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd', pixel_type=itk.F)
 
+    # save original metadata into a new image without buffer
+    empty_region = itk.ImageRegion[3]()
+    atlas_aa_original_metadata = itk.Image[itk.F, 3].New()
+    atlas_aa_original_metadata.CopyInformation(atlas_aa_segmentation)
+    atlas_aa_original_metadata.SetRegions(empty_region)
+    atlas_aa_original_metadata.Allocate(True)  # this should make it at least a somewhat normal image
+
+    # create an atlas laterality changer transform
+    atlas_aa_laterality_inverter = itk.Rigid3DTransform.New()
+    invert_superior_inferior = atlas_aa_laterality_inverter.GetParameters()
+    # the canonical pose was chosen without regard for proper anatomical orientation
+    invert_superior_inferior[8] = -1  # so we mirror along SI axis
+    atlas_aa_laterality_inverter.SetParameters(invert_superior_inferior)
+
+    atlas_aa_mirrored_metadata = itk.transform_geometry_image_filter(atlas_aa_original_metadata,
+                                                                     Transform=atlas_aa_laterality_inverter)
+
     # now go through all the cases, doing main processing
     for case in data_list:
         print(f'Processing case {case}')
+
+        # change atlas laterality (mirror left/right) if needed
+        if case[-1] != atlas[-1]:
+            atlas_aa_image.CopyInformation(atlas_aa_mirrored_metadata)
+            atlas_aa_segmentation.CopyInformation(atlas_aa_mirrored_metadata)
+        else:
+            atlas_aa_image.CopyInformation(atlas_aa_original_metadata)
+            atlas_aa_segmentation.CopyInformation(atlas_aa_original_metadata)
+        # itk.imwrite(atlas_aa_segmentation, 'atlas_aa_segmentation.nrrd', compression=True)  # debug
+
+        # we don't need to change laterality of atlas landmarks
+        # as they all lie in a plane with K coordinate of zero
         case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
         case_to_pose = register_landmarks(pose, case_landmarks)
         pose_to_case = rigid_transform_type.New()
