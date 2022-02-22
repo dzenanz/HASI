@@ -122,6 +122,18 @@ def main_processing(root_dir, bone, atlas):
     #                                    pixel_type=itk.VariableLengthVector[itk.UC])
     atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd', pixel_type=itk.UC)
 
+    # reduce the image to a bounding box around the segmented bone
+    # the other content makes the registration more difficult
+    # because the knees will be bent to different degree etc
+    image_mask_spatial_object = itk.ImageMaskSpatialObject[3].New(atlas_aa_segmentation)
+    label_bounding_box = image_mask_spatial_object.ComputeMyBoundingBoxInIndexSpace()
+    atlas_aa_segmentation = itk.region_of_interest_image_filter(
+        atlas_aa_segmentation,
+        region_of_interest=label_bounding_box)
+    atlas_aa_image = itk.region_of_interest_image_filter(
+        atlas_aa_image,
+        region_of_interest=label_bounding_box)
+
     # create an atlas laterality changer transform
     atlas_aa_laterality_inverter = itk.Rigid3DTransform.New()
     invert_superior_inferior = atlas_aa_laterality_inverter.GetParameters()
@@ -139,7 +151,6 @@ def main_processing(root_dir, bone, atlas):
         case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
         pose_to_case = register_landmarks(case_landmarks, pose)
 
-        # change atlas laterality (mirror left/right) if needed
         if case[-1] != atlas[-1]:  # last letter of file name is either L or R
             print(f'Changing atlas laterality from {atlas[-1]} to {case[-1]}.')
             # pose_to_case.Compose(atlas_aa_laterality_inverter, True)
