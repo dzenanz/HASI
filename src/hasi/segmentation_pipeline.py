@@ -19,6 +19,8 @@
 import itk
 import os
 from pathlib import Path
+import sys
+import traceback
 
 
 def sorted_file_list(folder, extension):
@@ -84,6 +86,7 @@ def register_landmarks(atlas_landmarks, input_landmarks):
 
 
 def main_processing(root_dir, bone, atlas):
+    root_dir = os.path.abspath(root_dir) + '/'
     data_list = sorted_file_list(root_dir + 'Data', '.nrrd')
     if atlas not in data_list:
         raise RuntimeError("Missing data file for the atlas")
@@ -117,14 +120,7 @@ def main_processing(root_dir, bone, atlas):
     atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA.nrrd', pixel_type=itk.F)
     # atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA.seg.nrrd',
     #                                    pixel_type=itk.VariableLengthVector[itk.UC])
-    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd', pixel_type=itk.F)
-
-    # save original metadata into a new image without buffer
-    empty_region = itk.ImageRegion[3]()
-    atlas_aa_original_metadata = itk.Image[itk.F, 3].New()
-    atlas_aa_original_metadata.CopyInformation(atlas_aa_segmentation)
-    atlas_aa_original_metadata.SetRegions(empty_region)
-    atlas_aa_original_metadata.Allocate(True)  # this should make it at least a somewhat normal image
+    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd', pixel_type=itk.UC)
 
     # create an atlas laterality changer transform
     atlas_aa_laterality_inverter = itk.Rigid3DTransform.New()
@@ -133,29 +129,24 @@ def main_processing(root_dir, bone, atlas):
     invert_superior_inferior[8] = -1  # so we mirror along SI axis
     atlas_aa_laterality_inverter.SetParameters(invert_superior_inferior)
 
-    atlas_aa_mirrored_metadata = itk.transform_geometry_image_filter(atlas_aa_original_metadata,
-                                                                     Transform=atlas_aa_laterality_inverter)
 
     # now go through all the cases, doing main processing
     for case in data_list:
+        print(u'\u2500' * 80)
         print(f'Processing case {case}')
+        case_base = root_dir + bone + '/' + case + '-' + atlas  # prefix for case file names
+
+        case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
+        pose_to_case = register_landmarks(case_landmarks, pose)
 
         # change atlas laterality (mirror left/right) if needed
-        if case[-1] != atlas[-1]:
-            atlas_aa_image.CopyInformation(atlas_aa_mirrored_metadata)
-            atlas_aa_segmentation.CopyInformation(atlas_aa_mirrored_metadata)
-        else:
-            atlas_aa_image.CopyInformation(atlas_aa_original_metadata)
-            atlas_aa_segmentation.CopyInformation(atlas_aa_original_metadata)
-        # itk.imwrite(atlas_aa_segmentation, 'atlas_aa_segmentation.nrrd', compression=True)  # debug
-
+        if case[-1] != atlas[-1]:  # last letter of file name is either L or R
+            print(f'Changing atlas laterality from {atlas[-1]} to {case[-1]}.')
+            # pose_to_case.Compose(atlas_aa_laterality_inverter, True)
+            pose_to_case.Compose(atlas_aa_laterality_inverter)
         # we don't need to change laterality of atlas landmarks
         # as they all lie in a plane with K coordinate of zero
-        case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
-        case_to_pose = register_landmarks(pose, case_landmarks)
-        pose_to_case = rigid_transform_type.New()
-        case_to_pose.GetInverse(pose_to_case)
-        # atlas_to_case = register_landmarks(case_landmarks, atlas_landmarks)
+
         case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd', pixel_type=itk.F)
 
         # write atlas_to_case transform to file - needed for initializing Elastix registration
@@ -163,7 +154,7 @@ def main_processing(root_dir, bone, atlas):
         affine_pose_to_case.SetCenter(pose_to_case.GetCenter())
         affine_pose_to_case.SetMatrix(pose_to_case.GetMatrix())
         affine_pose_to_case.SetOffset(pose_to_case.GetOffset())
-        atlas_to_case_filename = root_dir + bone + '/' + case + '-' + atlas + '.tfm'
+        atlas_to_case_filename = case_base + '.tfm'
         itk.transformwrite([affine_pose_to_case], atlas_to_case_filename)
         out_elastix_transform = open(atlas_to_case_filename + '.txt', "w")
         out_elastix_transform.writelines(['(Transform "File")\n',
@@ -180,32 +171,41 @@ def main_processing(root_dir, bone, atlas):
         parameter_object.SetParameter("DefaultPixelValue", "-1024")
 
         print('Starting atlas registration')
-        registered, elastix_transform = itk.elastix_registration_method(
-            case_image, atlas_aa_image,
-            parameter_object=parameter_object,
-            initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
-            log_to_console=True,
-        )
-        registered_filename = root_dir + bone + '/' + case + '-' + atlas + '-reg.nrrd'
-        print(f'Writing registered image to file {registered_filename}')
-        itk.imwrite(registered.astype(itk.SS), registered_filename)
-        print(elastix_transform)
+        try:
+            registered, elastix_transform = itk.elastix_registration_method(
+                case_image,  # fixed image is used as primary input to the filter
+                moving_image=atlas_aa_image,
+                # moving_mask=atlas_aa_segmentation,
+                parameter_object=parameter_object,
+                initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
+                log_to_console=True,
+            )
+        except Exception as e:
+            print(f'Exception encountered for {case}')
+            traceback.print_exception(*sys.exc_info())
+            continue
+
         # serialize each parameter map to a file.
         for index in range(elastix_transform.GetNumberOfParameterMaps()):
             parameter_map = elastix_transform.GetParameterMap(index)
             elastix_transform.WriteParameterFile(
                 parameter_map,
-                root_dir + bone + '/' + case + '-' + atlas + '.{0}.txt'.format(index))
+                case_base + f".{index}.txt")
+
+        registered_filename = case_base + '-reg.nrrd'
+        print(f'Writing registered image to file {registered_filename}')
+        itk.imwrite(registered.astype(itk.SS), registered_filename)
+
 
         print('Running transformix')
         elastix_transform.SetParameter('FinalBSplineInterpolationOrder', '0')
         result_image_transformix = itk.transformix_filter(
-            atlas_aa_segmentation,
+            atlas_aa_segmentation.astype(itk.F),  # transformix only works with float pixels
             elastix_transform,
             # reference image?
         )
         result_image = result_image_transformix.astype(itk.UC)
-        registered_label_file = root_dir + bone + '/' + case + '-' + atlas + '-label.nrrd'
+        registered_label_file = case_base + '-label.nrrd'
         print(f'Writing deformed atlas to {registered_label_file}')
         itk.imwrite(result_image, registered_label_file, compression=True)
 
@@ -237,7 +237,7 @@ def main_processing(root_dir, bone, atlas):
         )
 
         mesh = itk.cuberille_image_to_mesh_filter(padded_segmentation)
-        mesh_filename = root_dir + bone + '/' + case + '-' + atlas + '.vtk'
+        mesh_filename = case_base + '.vtk'
         print(f'Writing the mesh to file {mesh_filename}')
         itk.meshwrite(mesh, mesh_filename)
 
@@ -245,7 +245,7 @@ def main_processing(root_dir, bone, atlas):
             mesh,
             transform=pose_to_case
         )
-        canonical_pose_filename = root_dir + bone + '/' + case + '-' + atlas + '.obj'
+        canonical_pose_filename = case_base + '.obj'
         print(f'Writing canonical pose mesh to {canonical_pose_filename}')
         itk.meshwrite(canonical_pose_mesh, canonical_pose_filename)
         print(f'Done processing case {case}')
