@@ -85,7 +85,19 @@ def register_landmarks(atlas_landmarks, input_landmarks):
     return rigid_transform
 
 
-def main_processing(root_dir, bone, atlas):
+# If label is non-zero, only the specified label participates
+# in computation of the bounding box.
+# Normally, all non-zero labels contribute to bounding box.
+def label_bounding_box(segmentation, label=0):
+    if label != 0:
+        segmentation = itk.binary_threshold_image_filter(
+            segmentation, lower_threshold=label, upper_threshold=label)
+    image_mask_spatial_object = itk.ImageMaskSpatialObject[3].New(segmentation)
+    bounding_box = image_mask_spatial_object.ComputeMyBoundingBoxInIndexSpace()
+    return bounding_box
+
+
+def main_processing(root_dir, bone, atlas, bone_label):
     root_dir = os.path.abspath(root_dir) + '/'
     data_list = sorted_file_list(root_dir + 'Data', '.nrrd')
     if atlas not in data_list:
@@ -125,14 +137,14 @@ def main_processing(root_dir, bone, atlas):
     # reduce the image to a bounding box around the segmented bone
     # the other content makes the registration more difficult
     # because the knees will be bent to different degree etc
-    image_mask_spatial_object = itk.ImageMaskSpatialObject[3].New(atlas_aa_segmentation)
-    label_bounding_box = image_mask_spatial_object.ComputeMyBoundingBoxInIndexSpace()
+    atlas_bounding_box = label_bounding_box(atlas_aa_segmentation)
     atlas_aa_segmentation = itk.region_of_interest_image_filter(
         atlas_aa_segmentation,
-        region_of_interest=label_bounding_box)
+        region_of_interest=atlas_bounding_box)
     atlas_aa_image = itk.region_of_interest_image_filter(
         atlas_aa_image,
-        region_of_interest=label_bounding_box)
+        region_of_interest=atlas_bounding_box)
+    # itk.imwrite(atlas_aa_image.astype(itk.SS), root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd') # debug
 
     # create an atlas laterality changer transform
     atlas_aa_laterality_inverter = itk.Rigid3DTransform.New()
@@ -140,7 +152,6 @@ def main_processing(root_dir, bone, atlas):
     # the canonical pose was chosen without regard for proper anatomical orientation
     invert_superior_inferior[8] = -1  # so we mirror along SI axis
     atlas_aa_laterality_inverter.SetParameters(invert_superior_inferior)
-
 
     # now go through all the cases, doing main processing
     for case in data_list:
@@ -159,6 +170,13 @@ def main_processing(root_dir, bone, atlas):
         # as they all lie in a plane with K coordinate of zero
 
         case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd', pixel_type=itk.F)
+        case_auto_segmentation = itk.imread(root_dir + 'AutoSegmentations/' + case + '-label.nrrd')
+
+        case_bounding_box = label_bounding_box(case_auto_segmentation, bone_label)
+        case_bone_image = itk.region_of_interest_image_filter(
+            case_image,
+            region_of_interest=case_bounding_box)
+        itk.imwrite(case_bone_image, root_dir + 'Bones/' + case + '-' + bone + '.nrrd') # debug
 
         # write atlas_to_case transform to file - needed for initializing Elastix registration
         affine_pose_to_case = itk.AffineTransform[itk.D, 3].New()
@@ -184,7 +202,7 @@ def main_processing(root_dir, bone, atlas):
         print('Starting atlas registration')
         try:
             registered, elastix_transform = itk.elastix_registration_method(
-                case_image,  # fixed image is used as primary input to the filter
+                case_bone_image,  # fixed image is used as primary input to the filter
                 moving_image=atlas_aa_image,
                 # moving_mask=atlas_aa_segmentation,
                 parameter_object=parameter_object,
@@ -207,7 +225,6 @@ def main_processing(root_dir, bone, atlas):
         print(f'Writing registered image to file {registered_filename}')
         itk.imwrite(registered.astype(itk.SS), registered_filename)
 
-
         print('Running transformix')
         elastix_transform.SetParameter('FinalBSplineInterpolationOrder', '0')
         result_image_transformix = itk.transformix_filter(
@@ -224,13 +241,13 @@ def main_processing(root_dir, bone, atlas):
         # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
         # atlas_labels_transformed = itk.resample_image_filter(atlas_aa_segmentation,
         #                                                      use_reference_image=True,
-        #                                                      reference_image=case_image,
+        #                                                      reference_image=case_bone_image,
         #                                                      transform=elastix_transform,
         #                                                      interpolator=nearest_interpolator)
         # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
 
         print('Computing morphometry features')
-        morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_image)
+        morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_bone_image)
         morphometry_filter.SetMaskImage(result_image)
         morphometry_filter.Update()
         print('BVTV', morphometry_filter.GetBVTV())
@@ -263,6 +280,6 @@ def main_processing(root_dir, bone, atlas):
 
 
 # main code
-main_processing('../../', 'Tibia', '901-R')
-main_processing('../../', 'Tibia', '901-L')
-main_processing('../../', 'Femur', '907-L')
+main_processing('../../', 'Tibia', '901-R', 2)
+main_processing('../../', 'Tibia', '901-L', 2)
+main_processing('../../', 'Femur', '907-L', 1)
