@@ -119,20 +119,32 @@ def process_case(root_dir, bone, case, bone_label, atlas):
     # we don't need to change laterality of atlas landmarks
     # as they all lie in a plane with K coordinate of zero
 
-    # read atlas image and its labels
-    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd')
-    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-' + bone + '-label.nrrd')
+    atlas_bone_label_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '-label.nrrd'
+    print(f'Reading {bone} variant of atlas labels from file: {atlas_bone_label_filename}')
+    atlas_aa_segmentation = itk.imread(atlas_bone_label_filename)
 
-    case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd')
-    case_auto_segmentation = itk.imread(root_dir + 'AutoSegmentations/' + case + '-label.nrrd')
+    atlas_bone_image_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd'
+    print(f'Reading {bone} variant of atlas image from file: {atlas_bone_image_filename}')
+    atlas_aa_image = itk.imread(atlas_bone_image_filename)
 
+    case_image_filename = root_dir + 'Data/' + case + '.nrrd'
+    print(f'Reading case image from file: {case_image_filename}')
+    case_image = itk.imread(case_image_filename)
+
+    auto_segmentation_filename = root_dir + 'AutoSegmentations/' + case + '-label.nrrd'
+    print(f'Reading case bone segmentation from file: {auto_segmentation_filename}')
+    case_auto_segmentation = itk.imread(auto_segmentation_filename)
+
+    print(f'Computing {bone} bounding box')
     case_bounding_box = label_bounding_box(case_auto_segmentation, bone_label)
     case_bone_image = itk.region_of_interest_image_filter(
         case_image,
         region_of_interest=case_bounding_box)
-    itk.imwrite(case_bone_image, root_dir + 'Bones/' + case + '-' + bone + '.nrrd')  # debug
+    case_bone_image_filename = root_dir + 'Bones/' + case + '-' + bone + '.nrrd'
+    print(f'Writing case bone image to file: {case_bone_image_filename}')
+    itk.imwrite(case_bone_image, case_bone_image_filename)
 
-    # write atlas_to_case transform to file - needed for initializing Elastix registration
+    print('Writing atlas to case transform to file for initializing Elastix registration')
     affine_pose_to_case = itk.AffineTransform[itk.D, 3].New()
     affine_pose_to_case.SetCenter(pose_to_case.GetCenter())
     affine_pose_to_case.SetMatrix(pose_to_case.GetMatrix())
@@ -218,7 +230,7 @@ def process_case(root_dir, bone, case, bone_label, atlas):
 
     canonical_pose_mesh = itk.transform_mesh_filter(
         mesh,
-        transform=pose_to_case
+        transform=pose_to_case  # TODO: we should use the result of Elastix registration here
     )
     canonical_pose_filename = case_base + '.obj'
     print(f'Writing canonical pose mesh to {canonical_pose_filename}')
