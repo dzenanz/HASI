@@ -176,7 +176,7 @@ def main_processing(root_dir, bone, atlas, bone_label):
         case_bone_image = itk.region_of_interest_image_filter(
             case_image,
             region_of_interest=case_bounding_box)
-        itk.imwrite(case_bone_image, root_dir + 'Bones/' + case + '-' + bone + '.nrrd') # debug
+        itk.imwrite(case_bone_image, root_dir + 'Bones/' + case + '-' + bone + '.nrrd')  # debug
 
         # write atlas_to_case transform to file - needed for initializing Elastix registration
         affine_pose_to_case = itk.AffineTransform[itk.D, 3].New()
@@ -208,7 +208,9 @@ def main_processing(root_dir, bone, atlas, bone_label):
                 # moving_mask=atlas_aa_segmentation,
                 parameter_object=parameter_object,
                 initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
-                log_to_console=True,
+                # log_to_console=True,
+                output_directory=root_dir + bone + '/',
+                log_file_name=case + '-' + atlas + '-elx.log'
             )
         except Exception as e:
             print(f'Exception encountered for {case}')
