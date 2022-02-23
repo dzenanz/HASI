@@ -198,6 +198,7 @@ def main_processing(root_dir, bone, atlas, bone_label):
         parameter_map_bspline = parameter_object.GetDefaultParameterMap("bspline", resolutions, 1.0)
         parameter_object.AddParameterMap(parameter_map_bspline)
         parameter_object.SetParameter("DefaultPixelValue", "-1024")
+        parameter_object.SetParameter("Metric", "AdvancedMeanSquares")
 
         print('Starting atlas registration')
         try:
