@@ -153,11 +153,14 @@ def process_case(root_dir, bone, case, bone_label, atlas):
     parameter_object.AddParameterMap(parameter_map_bspline)
     parameter_object.SetParameter("DefaultPixelValue", "-1024")
     parameter_object.SetParameter("Metric", "AdvancedMeanSquares")
+    # parameter_object.SetParameter("FixedInternalImagePixelType", "short")
+    # parameter_object.SetParameter("MovingInternalImagePixelType", "short")
+    # we still have to use float pixels
 
     print('Starting atlas registration')
     registered, elastix_transform = itk.elastix_registration_method(
         case_bone_image.astype(itk.F),  # fixed image is used as primary input to the filter
-        moving_image=atlas_aa_image.astype(itk.F),  # TODO: could we keep them as SS here?
+        moving_image=atlas_aa_image.astype(itk.F),
         # moving_mask=atlas_aa_segmentation,
         parameter_object=parameter_object,
         initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
