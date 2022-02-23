@@ -67,6 +67,13 @@ def read_slicer_fiducials(filename):
 
 rigid_transform_type = itk.VersorRigid3DTransform[itk.D]
 
+# create an atlas laterality changer transform
+atlas_aa_laterality_inverter = itk.Rigid3DTransform.New()
+invert_superior_inferior = atlas_aa_laterality_inverter.GetParameters()
+# the canonical pose was chosen without regard for proper anatomical orientation
+invert_superior_inferior[8] = -1  # so we mirror along SI axis
+atlas_aa_laterality_inverter.SetParameters(invert_superior_inferior)
+
 
 def register_landmarks(atlas_landmarks, input_landmarks):
     transform_type = itk.Transform[itk.D, 3, 3]
@@ -97,6 +104,128 @@ def label_bounding_box(segmentation, label=0):
     return bounding_box
 
 
+def process_case(root_dir, bone, case, bone_label, atlas, atlas_aa_image, atlas_aa_segmentation):
+    case_base = root_dir + bone + '/' + case + '-' + atlas  # prefix for case file names
+
+    pose = read_slicer_fiducials(root_dir + bone + '/Pose.fcsv')
+
+    case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
+    pose_to_case = register_landmarks(case_landmarks, pose)
+
+    if case[-1] != atlas[-1]:  # last letter of file name is either L or R
+        print(f'Changing atlas laterality from {atlas[-1]} to {case[-1]}.')
+        # pose_to_case.Compose(atlas_aa_laterality_inverter, True)
+        pose_to_case.Compose(atlas_aa_laterality_inverter)
+    # we don't need to change laterality of atlas landmarks
+    # as they all lie in a plane with K coordinate of zero
+
+    case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd', pixel_type=itk.F)
+    case_auto_segmentation = itk.imread(root_dir + 'AutoSegmentations/' + case + '-label.nrrd')
+
+    case_bounding_box = label_bounding_box(case_auto_segmentation, bone_label)
+    case_bone_image = itk.region_of_interest_image_filter(
+        case_image,
+        region_of_interest=case_bounding_box)
+    itk.imwrite(case_bone_image, root_dir + 'Bones/' + case + '-' + bone + '.nrrd')  # debug
+
+    # write atlas_to_case transform to file - needed for initializing Elastix registration
+    affine_pose_to_case = itk.AffineTransform[itk.D, 3].New()
+    affine_pose_to_case.SetCenter(pose_to_case.GetCenter())
+    affine_pose_to_case.SetMatrix(pose_to_case.GetMatrix())
+    affine_pose_to_case.SetOffset(pose_to_case.GetOffset())
+    atlas_to_case_filename = case_base + '.tfm'
+    itk.transformwrite([affine_pose_to_case], atlas_to_case_filename)
+    out_elastix_transform = open(atlas_to_case_filename + '.txt', "w")
+    out_elastix_transform.writelines(['(Transform "File")\n',
+                                      '(TransformFileName "' + case + '-' + atlas + '.tfm")'])
+    out_elastix_transform.close()
+
+    # Construct elastix parameter map
+    parameter_object = itk.ParameterObject.New()
+    resolutions = 4
+    parameter_map_rigid = parameter_object.GetDefaultParameterMap('rigid', resolutions)
+    parameter_object.AddParameterMap(parameter_map_rigid)
+    parameter_map_bspline = parameter_object.GetDefaultParameterMap("bspline", resolutions, 1.0)
+    parameter_object.AddParameterMap(parameter_map_bspline)
+    parameter_object.SetParameter("DefaultPixelValue", "-1024")
+    parameter_object.SetParameter("Metric", "AdvancedMeanSquares")
+
+    print('Starting atlas registration')
+    registered, elastix_transform = itk.elastix_registration_method(
+        case_bone_image,  # fixed image is used as primary input to the filter
+        moving_image=atlas_aa_image,
+        # moving_mask=atlas_aa_segmentation,
+        parameter_object=parameter_object,
+        initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
+        # log_to_console=True,
+        output_directory=root_dir + bone + '/',
+        log_file_name=case + '-' + atlas + '-elx.log'
+    )
+
+    # serialize each parameter map to a file.
+    for index in range(elastix_transform.GetNumberOfParameterMaps()):
+        parameter_map = elastix_transform.GetParameterMap(index)
+        elastix_transform.WriteParameterFile(
+            parameter_map,
+            case_base + f".{index}.txt")
+
+    registered_filename = case_base + '-reg.nrrd'
+    print(f'Writing registered image to file {registered_filename}')
+    itk.imwrite(registered.astype(itk.SS), registered_filename)
+
+    print('Running transformix')
+    elastix_transform.SetParameter('FinalBSplineInterpolationOrder', '0')
+    result_image_transformix = itk.transformix_filter(
+        atlas_aa_segmentation.astype(itk.F),  # transformix only works with float pixels
+        elastix_transform,
+        # reference image?
+    )
+    result_image = result_image_transformix.astype(itk.UC)
+    registered_label_file = case_base + '-label.nrrd'
+    print(f'Writing deformed atlas to {registered_label_file}')
+    itk.imwrite(result_image, registered_label_file, compression=True)
+
+    # # now use the transform to transfer atlas labels to the case under observation
+    # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
+    # atlas_labels_transformed = itk.resample_image_filter(atlas_aa_segmentation,
+    #                                                      use_reference_image=True,
+    #                                                      reference_image=case_bone_image,
+    #                                                      transform=elastix_transform,
+    #                                                      interpolator=nearest_interpolator)
+    # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
+
+    print('Computing morphometry features')
+    morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_bone_image)
+    morphometry_filter.SetMaskImage(result_image)
+    morphometry_filter.Update()
+    print('BVTV', morphometry_filter.GetBVTV())
+    print('TbN', morphometry_filter.GetTbN())
+    print('TbTh', morphometry_filter.GetTbTh())
+    print('TbSp', morphometry_filter.GetTbSp())
+    print('BSBV', morphometry_filter.GetBSBV())
+
+    print('Generate the mesh from the segmented case')
+    padded_segmentation = itk.constant_pad_image_filter(
+        result_image,
+        PadUpperBound=1,
+        PadLowerBound=1,
+        Constant=0
+    )
+
+    mesh = itk.cuberille_image_to_mesh_filter(padded_segmentation)
+    mesh_filename = case_base + '.vtk'
+    print(f'Writing the mesh to file {mesh_filename}')
+    itk.meshwrite(mesh, mesh_filename)
+
+    canonical_pose_mesh = itk.transform_mesh_filter(
+        mesh,
+        transform=pose_to_case
+    )
+    canonical_pose_filename = case_base + '.obj'
+    print(f'Writing canonical pose mesh to {canonical_pose_filename}')
+    itk.meshwrite(canonical_pose_mesh, canonical_pose_filename)
+
+
 def main_processing(root_dir, bone, atlas, bone_label):
     root_dir = os.path.abspath(root_dir) + '/'
     data_list = sorted_file_list(root_dir + 'Data', '.nrrd')
@@ -119,8 +248,6 @@ def main_processing(root_dir, bone, atlas, bone_label):
         print('landmarks_list:', landmarks_list)
     print(f'List of cases to process: {data_list}')
 
-    pose = read_slicer_fiducials(root_dir + bone + '/Pose.fcsv')
-
     # now load atlas landmarks, axis-aligning transform, image, and segmentation
     # atlas_landmarks = read_slicer_fiducials(root_dir + bone + '/' + atlas + '.fcsv')  # not needed
     atlas_aa_transform = itk.transformread(root_dir + bone + '/' + atlas + '-landmarks.tfm')
@@ -141,144 +268,22 @@ def main_processing(root_dir, bone, atlas, bone_label):
     atlas_aa_segmentation = itk.region_of_interest_image_filter(
         atlas_aa_segmentation,
         region_of_interest=atlas_bounding_box)
+    atlas_bone_label_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '-label.nrrd'
+    itk.imwrite(atlas_aa_segmentation, atlas_bone_label_filename)
     atlas_aa_image = itk.region_of_interest_image_filter(
         atlas_aa_image,
         region_of_interest=atlas_bounding_box)
-    # itk.imwrite(atlas_aa_image.astype(itk.SS), root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd') # debug
+    atlas_bone_image_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd'
+    itk.imwrite(atlas_aa_image.astype(itk.SS), atlas_bone_image_filename)
 
-    # create an atlas laterality changer transform
-    atlas_aa_laterality_inverter = itk.Rigid3DTransform.New()
-    invert_superior_inferior = atlas_aa_laterality_inverter.GetParameters()
-    # the canonical pose was chosen without regard for proper anatomical orientation
-    invert_superior_inferior[8] = -1  # so we mirror along SI axis
-    atlas_aa_laterality_inverter.SetParameters(invert_superior_inferior)
 
     # now go through all the cases, doing main processing
     for case in data_list:
         print(u'\u2500' * 80)
         print(f'Processing case {case}')
-        case_base = root_dir + bone + '/' + case + '-' + atlas  # prefix for case file names
 
-        case_landmarks = read_slicer_fiducials(root_dir + bone + '/' + case + '.fcsv')
-        pose_to_case = register_landmarks(case_landmarks, pose)
+        process_case(root_dir, bone, case, bone_label, atlas, atlas_aa_image, atlas_aa_segmentation)
 
-        if case[-1] != atlas[-1]:  # last letter of file name is either L or R
-            print(f'Changing atlas laterality from {atlas[-1]} to {case[-1]}.')
-            # pose_to_case.Compose(atlas_aa_laterality_inverter, True)
-            pose_to_case.Compose(atlas_aa_laterality_inverter)
-        # we don't need to change laterality of atlas landmarks
-        # as they all lie in a plane with K coordinate of zero
-
-        case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd', pixel_type=itk.F)
-        case_auto_segmentation = itk.imread(root_dir + 'AutoSegmentations/' + case + '-label.nrrd')
-
-        case_bounding_box = label_bounding_box(case_auto_segmentation, bone_label)
-        case_bone_image = itk.region_of_interest_image_filter(
-            case_image,
-            region_of_interest=case_bounding_box)
-        itk.imwrite(case_bone_image, root_dir + 'Bones/' + case + '-' + bone + '.nrrd')  # debug
-
-        # write atlas_to_case transform to file - needed for initializing Elastix registration
-        affine_pose_to_case = itk.AffineTransform[itk.D, 3].New()
-        affine_pose_to_case.SetCenter(pose_to_case.GetCenter())
-        affine_pose_to_case.SetMatrix(pose_to_case.GetMatrix())
-        affine_pose_to_case.SetOffset(pose_to_case.GetOffset())
-        atlas_to_case_filename = case_base + '.tfm'
-        itk.transformwrite([affine_pose_to_case], atlas_to_case_filename)
-        out_elastix_transform = open(atlas_to_case_filename + '.txt', "w")
-        out_elastix_transform.writelines(['(Transform "File")\n',
-                                          '(TransformFileName "' + case + '-' + atlas + '.tfm")'])
-        out_elastix_transform.close()
-
-        # Construct elastix parameter map
-        parameter_object = itk.ParameterObject.New()
-        resolutions = 4
-        parameter_map_rigid = parameter_object.GetDefaultParameterMap('rigid', resolutions)
-        parameter_object.AddParameterMap(parameter_map_rigid)
-        parameter_map_bspline = parameter_object.GetDefaultParameterMap("bspline", resolutions, 1.0)
-        parameter_object.AddParameterMap(parameter_map_bspline)
-        parameter_object.SetParameter("DefaultPixelValue", "-1024")
-        parameter_object.SetParameter("Metric", "AdvancedMeanSquares")
-
-        print('Starting atlas registration')
-        try:
-            registered, elastix_transform = itk.elastix_registration_method(
-                case_bone_image,  # fixed image is used as primary input to the filter
-                moving_image=atlas_aa_image,
-                # moving_mask=atlas_aa_segmentation,
-                parameter_object=parameter_object,
-                initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
-                # log_to_console=True,
-                output_directory=root_dir + bone + '/',
-                log_file_name=case + '-' + atlas + '-elx.log'
-            )
-        except Exception as e:
-            print(f'Exception encountered for {case}')
-            traceback.print_exception(*sys.exc_info())
-            continue
-
-        # serialize each parameter map to a file.
-        for index in range(elastix_transform.GetNumberOfParameterMaps()):
-            parameter_map = elastix_transform.GetParameterMap(index)
-            elastix_transform.WriteParameterFile(
-                parameter_map,
-                case_base + f".{index}.txt")
-
-        registered_filename = case_base + '-reg.nrrd'
-        print(f'Writing registered image to file {registered_filename}')
-        itk.imwrite(registered.astype(itk.SS), registered_filename)
-
-        print('Running transformix')
-        elastix_transform.SetParameter('FinalBSplineInterpolationOrder', '0')
-        result_image_transformix = itk.transformix_filter(
-            atlas_aa_segmentation.astype(itk.F),  # transformix only works with float pixels
-            elastix_transform,
-            # reference image?
-        )
-        result_image = result_image_transformix.astype(itk.UC)
-        registered_label_file = case_base + '-label.nrrd'
-        print(f'Writing deformed atlas to {registered_label_file}')
-        itk.imwrite(result_image, registered_label_file, compression=True)
-
-        # # now use the transform to transfer atlas labels to the case under observation
-        # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
-        # atlas_labels_transformed = itk.resample_image_filter(atlas_aa_segmentation,
-        #                                                      use_reference_image=True,
-        #                                                      reference_image=case_bone_image,
-        #                                                      transform=elastix_transform,
-        #                                                      interpolator=nearest_interpolator)
-        # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
-
-        print('Computing morphometry features')
-        morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_bone_image)
-        morphometry_filter.SetMaskImage(result_image)
-        morphometry_filter.Update()
-        print('BVTV', morphometry_filter.GetBVTV())
-        print('TbN', morphometry_filter.GetTbN())
-        print('TbTh', morphometry_filter.GetTbTh())
-        print('TbSp', morphometry_filter.GetTbSp())
-        print('BSBV', morphometry_filter.GetBSBV())
-
-        print('Generate the mesh from the segmented case')
-        padded_segmentation = itk.constant_pad_image_filter(
-            result_image,
-            PadUpperBound=1,
-            PadLowerBound=1,
-            Constant=0
-        )
-
-        mesh = itk.cuberille_image_to_mesh_filter(padded_segmentation)
-        mesh_filename = case_base + '.vtk'
-        print(f'Writing the mesh to file {mesh_filename}')
-        itk.meshwrite(mesh, mesh_filename)
-
-        canonical_pose_mesh = itk.transform_mesh_filter(
-            mesh,
-            transform=pose_to_case
-        )
-        canonical_pose_filename = case_base + '.obj'
-        print(f'Writing canonical pose mesh to {canonical_pose_filename}')
-        itk.meshwrite(canonical_pose_mesh, canonical_pose_filename)
         print(f'Done processing case {case}')
 
 
