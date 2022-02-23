@@ -189,14 +189,6 @@ def process_case(root_dir, bone, case, bone_label, atlas):
     print(f'Writing deformed atlas to {registered_label_file}')
     itk.imwrite(result_image, registered_label_file, compression=True)
 
-    # # now use the transform to transfer atlas labels to the case under observation
-    # nearest_interpolator = itk.NearestNeighborInterpolateImageFunction.New(atlas_aa_segmentation)
-    # atlas_labels_transformed = itk.resample_image_filter(atlas_aa_segmentation,
-    #                                                      use_reference_image=True,
-    #                                                      reference_image=case_bone_image,
-    #                                                      transform=elastix_transform,
-    #                                                      interpolator=nearest_interpolator)
-    # itk.imwrite(atlas_labels_transformed, 'case-label.nrrd', compression=True)
 
     print('Computing morphometry features')
     morphometry_filter = itk.BoneMorphometryFeaturesFilter[type(atlas_aa_image)].New(case_bone_image)
@@ -252,13 +244,6 @@ def main_processing(root_dir, bone, atlas, bone_label):
         print('landmarks_list:', landmarks_list)
     print(f'List of cases to process: {data_list}')
 
-    # now load atlas landmarks, axis-aligning transform, image, and segmentation
-    # atlas_landmarks = read_slicer_fiducials(root_dir + bone + '/' + atlas + '.fcsv')  # not needed
-    atlas_aa_transform = itk.transformread(root_dir + bone + '/' + atlas + '-landmarks.tfm')
-    atlas_aa_transform = atlas_aa_transform[0]  # turn this from a list into a transform
-    atlas_aa_inverse_transform = rigid_transform_type.New()
-    atlas_aa_transform.GetInverse(atlas_aa_inverse_transform)
-    # atlas_aa_landmarks = pose
     atlas_image_filename = root_dir + bone + '/' + atlas + '-AA.nrrd'
     print(f'Reading atlas image from file: {atlas_image_filename}')
     atlas_aa_image = itk.imread(atlas_image_filename)
