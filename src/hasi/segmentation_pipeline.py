@@ -104,7 +104,7 @@ def label_bounding_box(segmentation, label=0):
     return bounding_box
 
 
-def process_case(root_dir, bone, case, bone_label, atlas, atlas_aa_image, atlas_aa_segmentation):
+def process_case(root_dir, bone, case, bone_label, atlas):
     case_base = root_dir + bone + '/' + case + '-' + atlas  # prefix for case file names
 
     pose = read_slicer_fiducials(root_dir + bone + '/Pose.fcsv')
@@ -119,7 +119,11 @@ def process_case(root_dir, bone, case, bone_label, atlas, atlas_aa_image, atlas_
     # we don't need to change laterality of atlas landmarks
     # as they all lie in a plane with K coordinate of zero
 
-    case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd', pixel_type=itk.F)
+    # read atlas image and its labels
+    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd')
+    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-' + bone + '-label.nrrd')
+
+    case_image = itk.imread(root_dir + 'Data/' + case + '.nrrd')
     case_auto_segmentation = itk.imread(root_dir + 'AutoSegmentations/' + case + '-label.nrrd')
 
     case_bounding_box = label_bounding_box(case_auto_segmentation, bone_label)
@@ -152,8 +156,8 @@ def process_case(root_dir, bone, case, bone_label, atlas, atlas_aa_image, atlas_
 
     print('Starting atlas registration')
     registered, elastix_transform = itk.elastix_registration_method(
-        case_bone_image,  # fixed image is used as primary input to the filter
-        moving_image=atlas_aa_image,
+        case_bone_image.astype(itk.F),  # fixed image is used as primary input to the filter
+        moving_image=atlas_aa_image.astype(itk.F),  # TODO: could we keep them as SS here?
         # moving_mask=atlas_aa_segmentation,
         parameter_object=parameter_object,
         initial_transform_parameter_file_name=atlas_to_case_filename + '.txt',
@@ -255,25 +259,33 @@ def main_processing(root_dir, bone, atlas, bone_label):
     atlas_aa_inverse_transform = rigid_transform_type.New()
     atlas_aa_transform.GetInverse(atlas_aa_inverse_transform)
     # atlas_aa_landmarks = pose
-
-    atlas_aa_image = itk.imread(root_dir + bone + '/' + atlas + '-AA.nrrd', pixel_type=itk.F)
+    atlas_image_filename = root_dir + bone + '/' + atlas + '-AA.nrrd'
+    print(f'Reading atlas image from file: {atlas_image_filename}')
+    atlas_aa_image = itk.imread(atlas_image_filename)
     # atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA.seg.nrrd',
     #                                    pixel_type=itk.VariableLengthVector[itk.UC])
-    atlas_aa_segmentation = itk.imread(root_dir + bone + '/' + atlas + '-AA-label.nrrd', pixel_type=itk.UC)
+    atlas_labels_filename = root_dir + bone + '/' + atlas + '-AA-label.nrrd'
+    print(f'Reading atlas labels from file: {atlas_labels_filename}')
+    atlas_aa_segmentation = itk.imread(atlas_labels_filename, pixel_type=itk.UC)
 
+    print('Computing bounding box of the labels')
     # reduce the image to a bounding box around the segmented bone
     # the other content makes the registration more difficult
     # because the knees will be bent to different degree etc
     atlas_bounding_box = label_bounding_box(atlas_aa_segmentation)
+
     atlas_aa_segmentation = itk.region_of_interest_image_filter(
         atlas_aa_segmentation,
         region_of_interest=atlas_bounding_box)
     atlas_bone_label_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '-label.nrrd'
+    print(f'Writing {bone} variant of atlas labels to file: {atlas_bone_label_filename}')
     itk.imwrite(atlas_aa_segmentation, atlas_bone_label_filename)
+
     atlas_aa_image = itk.region_of_interest_image_filter(
         atlas_aa_image,
         region_of_interest=atlas_bounding_box)
     atlas_bone_image_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '.nrrd'
+    print(f'Writing {bone} variant of atlas image to file: {atlas_bone_image_filename}')
     itk.imwrite(atlas_aa_image.astype(itk.SS), atlas_bone_image_filename)
 
 
@@ -282,7 +294,7 @@ def main_processing(root_dir, bone, atlas, bone_label):
         print(u'\u2500' * 80)
         print(f'Processing case {case}')
 
-        process_case(root_dir, bone, case, bone_label, atlas, atlas_aa_image, atlas_aa_segmentation)
+        process_case(root_dir, bone, case, bone_label, atlas)
 
         print(f'Done processing case {case}')
 
