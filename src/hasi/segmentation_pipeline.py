@@ -312,7 +312,7 @@ if __name__ == '__main__':
         process_case(sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5])
     elif len(sys.argv) == 1:  # direct invocation
         # main_processing('../../', 'Tibia', '901-R', 2)
-        # main_processing('../../', 'Tibia', '901-L', 2)
+        main_processing('../../', 'Tibia', '901-L', 2)
         main_processing('../../', 'Femur', '907-L', 1)
         main_processing('../../', 'Femur', '907-R', 1)
         # TODO: add for loops here to do this for all available atlases
