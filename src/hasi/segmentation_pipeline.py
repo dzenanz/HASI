@@ -60,6 +60,8 @@ def read_slicer_fiducials(filename):
         p = itk.Point[itk.D, 3]()
         for i in range(3):
             p[i] = float(e[i + 1])
+            if ras and i < 2:
+                p[i] = -p[i]
         fiducials.append(p)
 
     return fiducials
