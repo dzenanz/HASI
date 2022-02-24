@@ -278,7 +278,7 @@ def main_processing(root_dir, bone, atlas, bone_label):
         region_of_interest=atlas_bounding_box)
     atlas_bone_label_filename = root_dir + bone + '/' + atlas + '-AA-' + bone + '-label.nrrd'
     print(f'Writing {bone} variant of atlas labels to file: {atlas_bone_label_filename}')
-    itk.imwrite(atlas_aa_segmentation, atlas_bone_label_filename)
+    itk.imwrite(atlas_aa_segmentation, atlas_bone_label_filename, compression=True)
 
     atlas_aa_image = itk.region_of_interest_image_filter(
         atlas_aa_image,
