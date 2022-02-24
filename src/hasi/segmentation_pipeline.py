@@ -240,15 +240,16 @@ def main_processing(root_dir, bone, atlas, bone_label):
     root_dir = os.path.abspath(root_dir) + '/'
     data_list = sorted_file_list(root_dir + 'Data', '.nrrd')
     if atlas not in data_list:
-        raise RuntimeError("Missing data file for the atlas")
+        raise RuntimeError('Missing data file for the atlas')
     data_list.remove(atlas)
 
     landmarks_list = sorted_file_list(root_dir + bone, '.fcsv')
     if atlas not in landmarks_list:
-        raise RuntimeError("Missing landmarks file for the atlas")
-    landmarks_list.remove(atlas)
+        print('Missing landmarks file for the atlas')
+    else:
+        landmarks_list.remove(atlas)
     if 'Pose' not in landmarks_list:
-        raise RuntimeError("Missing Pose.fcsv file")
+        raise RuntimeError('Missing Pose.fcsv file')
     landmarks_list.remove('Pose')
 
     # check if there are any discrepancies
@@ -256,6 +257,7 @@ def main_processing(root_dir, bone, atlas, bone_label):
         print('There is a discrepancy between data_list and landmarks_list')
         print('data_list:', data_list)
         print('landmarks_list:', landmarks_list)
+        sys.exit(1)
     print(f'List of cases to process: {data_list}')
 
     atlas_image_filename = root_dir + bone + '/' + atlas + '-AA.nrrd'
